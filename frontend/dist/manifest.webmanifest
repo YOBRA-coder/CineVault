@@ -1,0 +1,28 @@
+{
+  "id": "/",
+  "name": "CineVault — Classic Cinema",
+  "short_name": "CineVault",
+  "description": "Search, preview, stream and download public-domain movies and series.",
+  "start_url": "/?source=pwa",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#0a0a0f",
+  "theme_color": "#0a0a0f",
+  "categories": ["entertainment", "video"],
+  "icons": [
+    { "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ],
+  "screenshots": [
+    { "src": "/icons/shot-wide.png", "sizes": "1280x800", "type": "image/png", "form_factor": "wide", "label": "Browse and filter the catalog" },
+    { "src": "/icons/shot-narrow.png", "sizes": "390x844", "type": "image/png", "form_factor": "narrow", "label": "Episodes, ratings and downloads" }
+  ],
+  "shortcuts": [
+    { "name": "Movies", "url": "/browse?kind=movie", "icons": [{ "src": "/icons/icon-192.png", "sizes": "192x192" }] },
+    { "name": "Series", "url": "/browse?kind=series", "icons": [{ "src": "/icons/icon-192.png", "sizes": "192x192" }] },
+    { "name": "My List", "url": "/list", "icons": [{ "src": "/icons/icon-192.png", "sizes": "192x192" }] },
+    { "name": "History", "url": "/history", "icons": [{ "src": "/icons/icon-192.png", "sizes": "192x192" }] }
+  ]
+}
