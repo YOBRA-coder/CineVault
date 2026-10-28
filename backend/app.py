@@ -634,7 +634,7 @@ def cli():
             threading.Thread(target=bg, daemon=True).start()
         port = int(os.environ.get("PORT", 10000))
         print(f"CineVault running on http://localhost:{port}")
-        app.run(host=os.environ.get("HOST", "127.0.0.1"), port=port, threaded=True, debug=False)
+        app.run(host=os.environ.get("HOST", "0.0.0.0"), port=port, threaded=True, debug=False)
         return
     db.init_db()
     with db.session() as conn:
