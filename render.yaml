@@ -1,0 +1,32 @@
+# Render Blueprint - New + > Blueprint, point it at this repo. The React app is pre-built in frontend/dist,
+# so there is no separate frontend service: Flask serves the API *and* the website.
+services:
+  - type: web
+    name: cinevault
+    runtime: python
+    plan: starter                  # persistent disks need a paid plan; see README for the free-tier variant
+    buildCommand: pip install -r backend/requirements.txt
+    # one worker + threads: SQLite-friendly, and streaming/downloads stay concurrent
+    startCommand: gunicorn --chdir backend wsgi:app --workers 1 --threads 16 --timeout 300 --bind 0.0.0.0:$PORT
+    healthCheckPath: /api/health
+    disk:
+      name: cinevault-data
+      mountPath: /var/data
+      sizeGB: 1
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.3
+      - key: CINEVAULT_DB
+        value: /var/data/cinevault.db
+      - key: ADMIN_TOKEN           # Render generates it - read it in the dashboard (Environment tab)
+        generateValue: true
+      - key: AUTO_IMPORT           # on first boot import this many public-domain films
+        value: "300"
+      - key: AUTO_SYNC
+        value: "1"
+      - key: PROXY_STREAM          # 0 = playback goes straight from archive.org (saves your bandwidth)
+        value: "0"
+      - key: PROXY_DOWNLOAD        # 1 = downloads are saved with proper names through your server
+        value: "1"
+      - key: TMDB_API_KEY          # optional: posters / cast / ratings
+        sync: false

@@ -54,6 +54,7 @@ def get_metadata(identifier):
 
 def search_items(query, rows=10, sort="downloads desc", fields=None):
     fields = fields or ["identifier", "title", "year", "downloads"]
+    # archive.org only honours the bracketed names `fl[]` / `sort[]`; plain `fl` returns docs without fields
     data = _get("/advancedsearch.php", **{"q": query, "fl[]": fields, "sort[]": [sort], "rows": rows, "page": 1, "output": "json"})
     return [d for d in data.get("response", {}).get("docs", []) if d.get("identifier")]
 
@@ -203,7 +204,7 @@ def sync_title(conn, title):
             _sync_series(conn, tid, ident, groups)
         _stamp(conn, tid, "ok")
         return "ok"
-    except requests.RequestException:
+    except (requests.RequestException, ValueError):
         _stamp(conn, tid, "error")
         return "error"
 
@@ -250,7 +251,13 @@ def sync_all(conn, progress=print, only_stale=False):
     for title in conn.execute("SELECT * FROM titles ORDER BY popularity DESC").fetchall():
         if only_stale and not needs_check(title):
             continue
-        status = sync_title(conn, title)
+        try:
+            status = sync_title(conn, title)
+        except Exception as e:  # one bad item must never stop the run
+            conn.rollback()
+            _stamp(conn, title["id"], "error")
+            status = "error"
+            progress(f"      ! {title['name']}: {type(e).__name__}: {e}")
         conn.commit()
         out[status] += 1
         progress(f"  [{status:7}] {title['name']}")
@@ -347,3 +354,54 @@ def import_catalog(conn, limit=100, query=None, progress=print):
         progress(f"  + {name} ({year or '?'})")
     conn.commit()
     return added
+
+
+# ---------------------------------------------------------------- add one title by hand (admin)
+def parse_identifier(ref):
+    """Accepts an archive.org URL (details/download/embed) or a bare identifier."""
+    ref = (ref or "").strip()
+    m = re.search(r"archive\.org/(?:details|download|embed|metadata)/([^/?#\s]+)", ref)
+    ident = m.group(1) if m else ref
+    return ident if re.fullmatch(r"[A-Za-z0-9._-]+", ident or "") else None
+
+
+def add_from_identifier(conn, ref, kind="movie", progress=print):
+    """Create a catalog title from one archive.org item (series: one episode per video file)."""
+    ident = parse_identifier(ref)
+    if not ident:
+        raise ValueError("That doesn't look like an archive.org link or identifier")
+    if conn.execute("SELECT 1 FROM titles WHERE ia_identifier=?", (ident,)).fetchone():
+        raise ValueError("This item is already in the catalog")
+    meta = get_metadata(ident)
+    if not meta:
+        raise ValueError("archive.org has no item with that identifier")
+    md = meta["metadata"]
+    groups = video_groups(meta)
+    if not groups:
+        raise ValueError("The item has no video files")
+    name = _clean_html(_first(md.get("title"))) or ident
+    try:
+        year = int(str(_first(md.get("year")) or _first(md.get("date")) or "")[:4])
+    except ValueError:
+        year = None
+    desc = _clean_html(_first(md.get("description")))[:900] or "No description available."
+    cur = conn.execute(
+        """INSERT INTO titles(slug, kind, name, year, description, rating, votes, runtime, director,
+             poster_url, backdrop_url, ia_identifier, popularity, license)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+        (catalog.unique_slug(conn, catalog.slugify(f"{name}-{year}" if year else name)), kind, name, year, desc, 0, 0, None,
+         _first(md.get("creator")), catalog.ia_thumb(ident, IA_BASE), catalog.ia_thumb(ident, IA_BASE), ident, 5, "Public Domain / CC"))
+    tid = cur.lastrowid
+    catalog.set_genres(conn, tid, map_genres(md.get("subject")))
+    if _first(md.get("creator")):
+        catalog.set_credit(conn, tid, _first(md.get("creator")), "director")
+    if kind == "series":
+        for n, stem in enumerate(groups, start=1):
+            conn.execute("INSERT INTO episodes(title_id, season, number, name) VALUES (?,?,?,?)",
+                         (tid, 1, n, re.sub(r"[_]+", " ", stem).strip()))
+    db.rebuild_fts(conn, tid)
+    conn.commit()
+    sync_title(conn, conn.execute("SELECT * FROM titles WHERE id=?", (tid,)).fetchone())
+    conn.commit()
+    progress(f"  + {name} ({year or '?'}) as {kind}")
+    return tid

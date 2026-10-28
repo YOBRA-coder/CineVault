@@ -5,6 +5,7 @@ import Browse from './pages/Browse.jsx';
 import Detail from './pages/Detail.jsx';
 import Player from './pages/Player.jsx';
 import { Downloads, History, MyList } from './pages/Library.jsx';
+import Admin from './pages/Admin.jsx';
 import { Link, useLocation } from './router.jsx';
 import { OfflineBar, UpdateBar } from './components/PwaBars.jsx';
 
@@ -23,6 +24,7 @@ export default function App() {
   else if (seg[0] === 'list') page = <MyList />;
   else if (seg[0] === 'history') page = <History />;
   else if (seg[0] === 'downloads') page = <Downloads />;
+  else if (seg[0] === 'admin') page = <Admin />;
   else page = <NotFound />;
   const watching = seg[0] === 'watch';
   return (
@@ -33,6 +35,7 @@ export default function App() {
       {!watching && (
         <footer className="footer">
           <p><b>CineVault</b> · Public-domain & openly licensed films and series, hosted by the <a href="https://archive.org" target="_blank" rel="noreferrer">Internet Archive</a>.</p>
+          <p><Link to="/admin">Admin</Link></p>
           <p>Metadata may be enriched by <a href="https://www.themoviedb.org" target="_blank" rel="noreferrer">TMDB</a> when enabled; this product is not endorsed or certified by TMDB.</p>
         </footer>
       )}

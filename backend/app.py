@@ -3,14 +3,19 @@
 Run:      python app.py                 (serves API + built React app on http://localhost:5000)
 Sync:     python app.py sync            (verify archive.org items, fetch playable files)
 Import:   python app.py import 200      (add up to 200 more public-domain films from archive.org)
+Add one:  python app.py add <archive.org link or id> [movie|series]
+Admin UI: http://localhost:5000/admin   (set ADMIN_TOKEN to use it on a server)
 Enrich:   python app.py tmdb            (optional posters/cast from TMDB when TMDB_API_KEY is set)
 """
 import difflib
+import hmac
 import mimetypes
 import os
 import re
 import sys
 import threading
+import time
+from collections import deque
 from urllib.parse import quote
 
 import requests
@@ -24,7 +29,9 @@ import tmdb
 HERE = os.path.dirname(os.path.abspath(__file__))
 DIST = os.environ.get("CINEVAULT_DIST", os.path.join(HERE, "..", "frontend", "dist"))
 ADMIN_TOKEN = os.environ.get("ADMIN_TOKEN", "")
-PROXY_MEDIA = os.environ.get("PROXY_MEDIA", "1") != "0"
+PROXY_MEDIA = os.environ.get("PROXY_MEDIA", "1") != "0"                       # master switch
+PROXY_STREAM = os.environ.get("PROXY_STREAM", "1" if PROXY_MEDIA else "0") != "0"      # false = redirect playback to archive.org
+PROXY_DOWNLOAD = os.environ.get("PROXY_DOWNLOAD", "1" if PROXY_MEDIA else "0") != "0"  # false = redirect downloads (browser may play instead of save)
 CID_RE = re.compile(r"^[A-Za-z0-9-]{8,64}$")
 SORTS = {
     "popular": "t.popularity DESC",
@@ -66,10 +73,12 @@ def create_app():
         return g.cid
 
     def need_admin():
-        if ADMIN_TOKEN and request.headers.get("X-Admin-Token") != ADMIN_TOKEN:
-            abort(403, "Admin token required")
-        if not ADMIN_TOKEN and request.remote_addr not in ("127.0.0.1", "::1"):
-            abort(403, "Admin actions are local-only unless ADMIN_TOKEN is set")
+        if ADMIN_TOKEN:
+            sent = request.headers.get("X-Admin-Token", "")
+            if not hmac.compare_digest(sent.encode(), ADMIN_TOKEN.encode()):
+                abort(403, "Admin token required")
+        elif request.remote_addr not in ("127.0.0.1", "::1"):
+            abort(403, "Admin is disabled: set the ADMIN_TOKEN environment variable to enable it remotely")
 
     @app.after_request
     def pwa_headers(resp):
@@ -382,7 +391,7 @@ def create_app():
 
     def upstream(f, attachment):
         url = archive.media_url(f["ia_identifier"], f["name"])
-        if not PROXY_MEDIA:
+        if not (PROXY_DOWNLOAD if attachment else PROXY_STREAM):
             return redirect(url, 302)
         headers = dict(archive.HEADERS)
         if request.headers.get("Range"):
@@ -570,38 +579,180 @@ def create_app():
         return jsonify(dict(row))
 
     # ------------------------------------------------------------ admin
-    jobs = {"running": None}
+    jobs = {"name": None, "started": None, "finished": None, "result": None, "error": None, "log": deque(maxlen=400)}
+    jobs_lock = threading.Lock()
 
     def run_job(name, fn):
-        if jobs["running"]:
-            abort(400, f"A job is already running: {jobs['running']}")
-        jobs["running"] = name
+        """Run fn(conn, log) in a background thread; one job at a time, live log for the admin UI."""
+        with jobs_lock:
+            if jobs["name"]:
+                abort(400, f"A job is already running: {jobs['name']}")
+            jobs.update(name=name, started=time.time(), finished=None, result=None, error=None)
+            jobs["log"].clear()
+
+        def log(msg=""):
+            jobs["log"].append(str(msg))
 
         def work():
             try:
+                log(f"Started {name}…")
                 with db.session() as conn:
-                    fn(conn)
+                    jobs["result"] = fn(conn, log)
+                log("Finished.")
+            except Exception as e:
+                jobs["error"] = f"{type(e).__name__}: {e}"
+                log(f"FAILED - {jobs['error']}")
+                if isinstance(e, requests.RequestException):
+                    log("Could not reach archive.org from this server (check internet / firewall / IA_BASE).")
             finally:
-                jobs["running"] = None
+                jobs["finished"] = time.time()
+                jobs["name"] = None
         threading.Thread(target=work, daemon=True).start()
 
-    @app.post("/api/admin/sync")
-    def admin_sync():
+    def job_json():
+        return {"running": jobs["name"], "started": jobs["started"], "finished": jobs["finished"],
+                "result": jobs["result"], "error": jobs["error"], "log": list(jobs["log"])}
+
+    @app.get("/api/admin/status")
+    def admin_status():
         need_admin()
-        run_job("sync", lambda c: archive.sync_all(c, progress=lambda *_: None))
-        return jsonify(started=True)
+        return jsonify(job_json())
+
+    @app.get("/api/admin/overview")
+    def admin_overview():
+        need_admin()
+        q = lambda sql: g.db.execute(sql).fetchone()[0]  # noqa: E731
+        path = db.DB_PATH
+        return jsonify(
+            titles=q("SELECT COUNT(*) FROM titles"), movies=q("SELECT COUNT(*) FROM titles WHERE kind='movie'"),
+            series=q("SELECT COUNT(*) FROM titles WHERE kind='series'"), episodes=q("SELECT COUNT(*) FROM episodes"),
+            files=q("SELECT COUNT(*) FROM media_files"),
+            status={r["sources_status"]: r["n"] for r in g.db.execute("SELECT sources_status, COUNT(*) AS n FROM titles GROUP BY 1")},
+            downloads=q("SELECT COUNT(*) FROM downloads"), plays=q("SELECT COUNT(*) FROM history"), clients=q("SELECT COUNT(*) FROM clients"),
+            tmdb=tmdb.enabled(), proxy_stream=PROXY_STREAM, proxy_download=PROXY_DOWNLOAD, archive_base=archive.IA_BASE,
+            db_path=path, db_mb=round(os.path.getsize(path) / 1e6, 2) if os.path.exists(path) else 0,
+            persistent=path.startswith("/var/data") or os.environ.get("PERSISTENT_STORAGE") == "1", job=job_json())
 
     @app.post("/api/admin/import")
     def admin_import():
         need_admin()
-        n = request.args.get("limit", 100, type=int)
-        run_job("import", lambda c: (archive.import_catalog(c, n, progress=lambda *_: None), archive.sync_all(c, progress=lambda *_: None, only_stale=True)))
+        body = request.get_json(silent=True) or {}
+        n = max(1, min(int(body.get("limit") or request.args.get("limit", 100)), 500))
+        query = (body.get("query") or "").strip() or None
+
+        def job(conn, log):
+            added = archive.import_catalog(conn, n, query=query, progress=log)
+            log(f"Imported {added} new titles. Checking files on archive.org…")
+            res = archive.sync_all(conn, progress=log, only_stale=True)
+            return {"imported": added, "sync": res}
+        run_job("import", job)
         return jsonify(started=True)
+
+    @app.post("/api/admin/sync")
+    def admin_sync():
+        need_admin()
+        stale = (request.get_json(silent=True) or {}).get("only_stale", False)
+        run_job("sync", lambda c, log: archive.sync_all(c, progress=log, only_stale=stale))
+        return jsonify(started=True)
+
+    @app.post("/api/admin/tmdb")
+    def admin_tmdb():
+        need_admin()
+        if not tmdb.enabled():
+            abort(400, "Set TMDB_API_KEY first")
+        run_job("tmdb", lambda c, log: {"enriched": tmdb.enrich_all(c, progress=log)})
+        return jsonify(started=True)
+
+    @app.post("/api/admin/reindex")
+    def admin_reindex():
+        need_admin()
+        db.rebuild_fts(g.db)
+        return jsonify(ok=True)
+
+    @app.get("/api/admin/titles")
+    def admin_titles():
+        need_admin()
+        a = request.args
+        where, params = ["1=1"], []
+        if a.get("q"):
+            where.append("(t.name LIKE ? OR t.ia_identifier LIKE ?)")
+            params += [f"%{a['q']}%"] * 2
+        if a.get("status"):
+            where.append("t.sources_status = ?")
+            params.append(a["status"])
+        if a.get("kind") in ("movie", "series"):
+            where.append("t.kind = ?")
+            params.append(a["kind"])
+        page, per = max(a.get("page", 1, type=int), 1), 25
+        w = " AND ".join(where)
+        total = g.db.execute(f"SELECT COUNT(*) FROM titles t WHERE {w}", params).fetchone()[0]
+        rows = g.db.execute(
+            f"""SELECT t.id, t.slug, t.kind, t.name, t.year, t.description, t.rating, t.ia_identifier, t.poster_url, t.sources_status,
+                       t.featured, t.license, (SELECT COUNT(*) FROM media_files f WHERE f.title_id=t.id) AS files
+                FROM titles t WHERE {w} ORDER BY t.id DESC LIMIT ? OFFSET ?""", (*params, per, (page - 1) * per)).fetchall()
+        return jsonify(items=[dict(r) for r in rows], total=total, page=page, pages=-(-total // per))
+
+    @app.post("/api/admin/titles")
+    def admin_add_title():
+        need_admin()
+        body = request.get_json(silent=True) or {}
+        kind = body.get("kind") if body.get("kind") in ("movie", "series") else "movie"
+        try:
+            tid = archive.add_from_identifier(g.db, body.get("identifier"), kind, progress=lambda *_: None)
+        except ValueError as e:
+            abort(400, str(e))
+        except requests.RequestException:
+            abort(400, "Couldn't reach archive.org from this server")
+        t = g.db.execute("SELECT id, slug, name, sources_status FROM titles WHERE id=?", (tid,)).fetchone()
+        return jsonify(dict(t))
+
+    @app.patch("/api/admin/titles/<int:tid>")
+    def admin_edit_title(tid):
+        need_admin()
+        t = find_title(tid)
+        body = request.get_json(silent=True) or {}
+        fields = {k: body[k] for k in ("name", "year", "description", "rating", "poster_url", "backdrop_url", "ia_identifier", "featured", "tagline", "director") if k in body}
+        if "ia_identifier" in fields:
+            ident = archive.parse_identifier(fields["ia_identifier"]) if fields["ia_identifier"] else None
+            if fields["ia_identifier"] and not ident:
+                abort(400, "Invalid archive.org identifier")
+            fields["ia_identifier"] = ident
+        if "name" in fields and not str(fields["name"]).strip():
+            abort(400, "Name can't be empty")
+        if "featured" in fields:
+            fields["featured"] = 1 if fields["featured"] else 0
+        if fields:
+            g.db.execute(f"UPDATE titles SET {', '.join(f'{k}=?' for k in fields)} WHERE id=?", (*fields.values(), tid))
+            if fields.get("ia_identifier") != t["ia_identifier"] and "ia_identifier" in fields:
+                g.db.execute("DELETE FROM media_files WHERE title_id=?", (tid,))
+                g.db.execute("UPDATE titles SET sources_status='pending', sources_checked_at=NULL WHERE id=?", (tid,))
+            db.rebuild_fts(g.db, tid)
+        return jsonify(ok=True)
+
+    @app.delete("/api/admin/titles/<int:tid>")
+    def admin_delete_title(tid):
+        need_admin()
+        find_title(tid)
+        g.db.execute("DELETE FROM title_fts WHERE rowid=?", (tid,))
+        g.db.execute("DELETE FROM titles WHERE id=?", (tid,))
+        return jsonify(ok=True)
+
+    @app.post("/api/admin/titles/<int:tid>/sync")
+    def admin_sync_one(tid):
+        need_admin()
+        t = find_title(tid)
+        try:
+            status = archive.sync_title(g.db, t)
+        except Exception as e:
+            status = "error"
+        g.db.commit()
+        return jsonify(status=status)
 
     @app.get("/api/health")
     def health():
         c = g.db.execute("SELECT COUNT(*) AS n, SUM(sources_status='ok') AS ok FROM titles").fetchone()
-        return jsonify(status="ok", titles=c["n"], with_sources=c["ok"] or 0, job=jobs["running"], tmdb=tmdb.enabled(), proxy_media=PROXY_MEDIA)
+        return jsonify(status="ok", titles=c["n"], with_sources=c["ok"] or 0, job=jobs["name"], tmdb=tmdb.enabled(),
+                       proxy_stream=PROXY_STREAM, proxy_download=PROXY_DOWNLOAD)
 
     # ------------------------------------------------------------ SPA
     @app.get("/", defaults={"path": ""})
@@ -620,38 +771,57 @@ def create_app():
     return app
 
 
+def start_background():
+    """Optional first-boot work, used by `python app.py` and by gunicorn (wsgi.py):
+    AUTO_IMPORT=N  import N public-domain films once (when none were imported yet)
+    AUTO_SYNC=1    verify stale titles against archive.org
+    """
+    def bg():
+        try:
+            with db.session() as conn:
+                n = int(os.environ.get("AUTO_IMPORT", "0") or 0)
+                if n and conn.execute("SELECT COUNT(*) FROM titles WHERE license LIKE '%CC%'").fetchone()[0] == 0:
+                    archive.import_catalog(conn, n, progress=lambda *_: None)
+                if os.environ.get("AUTO_SYNC", "1") == "1":
+                    archive.sync_all(conn, progress=lambda *_: None, only_stale=True)
+        except Exception as e:
+            print(f"[background] {type(e).__name__}: {e}", file=sys.stderr)
+    threading.Thread(target=bg, daemon=True).start()
+
+
 def cli():
     cmd = sys.argv[1] if len(sys.argv) > 1 else "run"
     if cmd == "run":
         app = create_app()
-        if os.environ.get("AUTO_SYNC", "1") == "1":
-            def bg():
-                try:
-                    with db.session() as conn:
-                        archive.sync_all(conn, progress=lambda *_: None, only_stale=True)
-                except Exception:
-                    pass
-            threading.Thread(target=bg, daemon=True).start()
-        port = int(os.environ.get("PORT", 10000))
-        print(f"CineVault running on http://localhost:{port}")
-        app.run(host=os.environ.get("HOST", "0.0.0.0"), port=port, threaded=True, debug=False)
+        start_background()
+        port = int(os.environ.get("PORT", 5000))
+        print(f"CineVault running on http://localhost:{port}   (admin panel: /admin)")
+        app.run(host=os.environ.get("HOST", "127.0.0.1"), port=port, threaded=True, debug=False)
         return
     db.init_db()
     with db.session() as conn:
         catalog.ensure_seeded(conn)
-        if cmd == "sync":
-            print(archive.sync_all(conn))
-        elif cmd == "import":
-            n = int(sys.argv[2]) if len(sys.argv) > 2 else 100
-            print(f"Imported {archive.import_catalog(conn, n)} titles")
-            print(archive.sync_all(conn, only_stale=True))
-        elif cmd == "tmdb":
-            print(f"Enriched {tmdb.enrich_all(conn)} titles")
-        elif cmd == "reseed":
-            catalog.seed(conn)
-            print("Catalog refreshed")
-        else:
-            print(__doc__)
+        try:
+            if cmd == "sync":
+                print(archive.sync_all(conn))
+            elif cmd == "import":
+                n = int(sys.argv[2]) if len(sys.argv) > 2 else 100
+                print(f"Imported {archive.import_catalog(conn, n)} titles")
+                print(archive.sync_all(conn, only_stale=True))
+            elif cmd == "add":
+                kind = sys.argv[3] if len(sys.argv) > 3 else "movie"
+                archive.add_from_identifier(conn, sys.argv[2], kind)
+            elif cmd == "tmdb":
+                print(f"Enriched {tmdb.enrich_all(conn)} titles")
+            elif cmd == "reseed":
+                catalog.seed(conn)
+                print("Catalog refreshed")
+            else:
+                print(__doc__)
+        except requests.RequestException as e:
+            sys.exit(f"Could not reach archive.org: {e}")
+        except (ValueError, IndexError) as e:
+            sys.exit(f"Error: {e}")
 
 
 if __name__ == "__main__":

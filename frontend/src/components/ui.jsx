@@ -25,6 +25,9 @@ const P = {
   mute: 'M4 9v6h4l5 4V5L8 9zM17 9l4 6M21 9l-4 6',
   film: 'M4 5h16v14H4zM8 5v14M16 5v14M4 9h4M4 15h4M16 9h4M16 15h4',
   filter: 'M4 5h16l-6 8v6l-4-2v-4z',
+  edit: 'M4 20h4L19 9l-4-4L4 16zM13.5 6.5l4 4',
+  refresh: 'M20 12a8 8 0 11-2.3-5.7M20 4v5h-5',
+  lock: 'M7 11V8a5 5 0 0110 0v3M5 11h14v9H5z',
 };
 
 export function Icon({ name, size = 20, fill = false, className = '' }) {

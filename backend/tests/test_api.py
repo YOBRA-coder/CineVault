@@ -48,18 +48,29 @@ class FakeIA(BaseHTTPRequestHandler):
             if ident == "Flash_Gordon_1936":
                 files = [{"name": f"flash_ch{n:02d}.mp4", "format": "h.264", "size": "5000", "height": "720", "length": "1200"} for n in range(1, 14)]
                 return self._json({"metadata": {"identifier": ident}, "files": files})
+            if ident == "brand_new_item":
+                return self._json({"metadata": {"identifier": ident, "title": "Brand New Item", "year": "1949", "creator": "A. Director",
+                                   "description": "Added by hand.", "subject": "comedy; silent"},
+                                   "files": [{"name": "item.mp4", "format": "h.264", "size": "9000", "height": "480", "length": "3000"}]})
+            if ident == "series_item":
+                return self._json({"metadata": {"identifier": ident, "title": "Tiny Serial", "year": "1950"},
+                                   "files": [{"name": f"ep{n}.mp4", "format": "h.264", "size": "900", "height": "360", "length": "600"} for n in (1, 2, 3)]})
             if ident == "found_by_search":
                 return self._json({"metadata": {"identifier": ident}, "files": [{"name": "m.mp4", "format": "h.264", "size": "10000", "height": "1080", "length": "7200"}]})
             return self._json({}, 200)  # archive.org answers {} for unknown ids
         if u.path == "/advancedsearch.php":
-            q = parse_qs(u.query).get("q", [""])[0]
+            qs = parse_qs(u.query)
+            q = qs.get("q", [""])[0]
+            docs = []
             if "Metropolis" in q:
-                return self._json({"response": {"docs": [{"identifier": "found_by_search", "title": "Metropolis", "year": "1927", "downloads": 500000}]}})
-            if "feature_films" in q:
-                return self._json({"response": {"docs": [
-                    {"identifier": "new_pd_film", "title": "A New Public Domain Film", "year": "1931", "creator": "Jane Doe",
-                     "description": "<p>An imported <b>film</b>.</p>", "subject": ["Horror", "Silent"], "downloads": 12345, "avg_rating": "4.0", "num_reviews": 12}]}})
-            return self._json({"response": {"docs": []}})
+                docs = [{"identifier": "found_by_search", "title": "Metropolis", "year": "1927", "downloads": 500000}]
+            elif "feature_films" in q:
+                docs = [{"identifier": "new_pd_film", "title": "A New Public Domain Film", "year": "1931", "creator": "Jane Doe",
+                         "description": "<p>An imported <b>film</b>.</p>", "subject": ["Horror", "Silent"], "downloads": 12345, "avg_rating": "4.0", "num_reviews": 12},
+                        {"title": "record without identifier"}]
+            # like the real archive.org: only the fields requested through the bracketed `fl[]` come back
+            wanted = qs.get("fl[]", [])
+            return self._json({"response": {"docs": [{k: v for k, v in d.items() if k in wanted} for d in docs]}})
         if u.path.startswith("/download/"):
             data, status = VIDEO, 200
             rng = self.headers.get("Range")
@@ -253,3 +264,92 @@ def test_spa_and_health(client):
     assert client.get("/api/health").get_json()["status"] == "ok"
     assert client.get("/api/nope").status_code == 404
     assert client.get("/some/route").status_code == 200
+
+
+# ------------------------------------------------------------------ admin
+def _wait_job(client, timeout=10):
+    import time
+    end = time.time() + timeout
+    while time.time() < end:
+        st = client.get("/api/admin/status").get_json()
+        if not st["running"]:
+            return st
+        time.sleep(0.05)
+    raise AssertionError("job did not finish")
+
+
+def test_search_uses_bracketed_fields_regression(client):
+    import archive
+    docs = archive.search_items("title:(\"x\") AND feature_films", rows=5)
+    assert docs and all(d["identifier"] for d in docs)         # docs without identifier are dropped
+    assert archive.find_identifier("Metropolis", 1927) == "found_by_search"
+
+
+def test_admin_import_job_with_log(client):
+    assert client.post("/api/admin/import", json={"limit": 10}).get_json()["started"]
+    st = _wait_job(client)
+    assert st["error"] is None and st["result"]["imported"] == 1
+    assert any("Imported 1 new titles" in line for line in st["log"])
+    assert client.get("/api/admin/overview").get_json()["titles"] == 39
+
+
+def test_admin_sync_job_and_overview(client):
+    client.post("/api/admin/sync", json={})
+    st = _wait_job(client)
+    assert st["result"]["ok"] >= 2 and st["result"]["missing"] >= 1
+    ov = client.get("/api/admin/overview").get_json()
+    assert ov["status"]["ok"] >= 2 and ov["files"] > 0 and ov["series"] == 3
+    assert client.post("/api/admin/tmdb").status_code == 400   # no TMDB key configured
+
+
+def test_admin_add_edit_delete_title(client):
+    r = client.post("/api/admin/titles", json={"identifier": "https://archive.org/details/brand_new_item?x=1"})
+    assert r.status_code == 200 and r.get_json()["sources_status"] == "ok"
+    tid = r.get_json()["id"]
+    assert client.post("/api/admin/titles", json={"identifier": "brand_new_item"}).status_code == 400      # duplicate
+    assert client.post("/api/admin/titles", json={"identifier": "does_not_exist"}).status_code == 400
+    assert client.post("/api/admin/titles", json={"identifier": "bad id!!"}).status_code == 400
+    d = client.get("/api/titles/brand-new-item-1949").get_json()
+    assert d["files"] and "Comedy" in d["genres"] and "Silent" in d["genres"]
+    s = client.post("/api/admin/titles", json={"identifier": "series_item", "kind": "series"}).get_json()
+    sd = client.get(f"/api/titles/{s['slug']}").get_json()
+    assert len(sd["episodes"]) == 3 and all(e["files"] for e in sd["episodes"])
+    assert client.patch(f"/api/admin/titles/{tid}", json={"name": "Renamed Gem", "featured": True, "description": "New text"}).status_code == 200
+    assert client.get("/api/titles?q=renamed gem").get_json()["items"][0]["name"] == "Renamed Gem"   # search index refreshed
+    assert client.patch(f"/api/admin/titles/{tid}", json={"name": " "}).status_code == 400
+    assert client.patch(f"/api/admin/titles/{tid}", json={"ia_identifier": "found_by_search"}).status_code == 200
+    row = [i for i in client.get("/api/admin/titles?q=Renamed").get_json()["items"]][0]
+    assert row["sources_status"] == "pending" and row["files"] == 0 and row["featured"] == 1
+    assert client.post(f"/api/admin/titles/{tid}/sync").get_json()["status"] == "ok"
+    assert client.delete(f"/api/admin/titles/{tid}").status_code == 200
+    assert client.get(f"/api/titles/{tid}").status_code == 404
+    assert client.get("/api/titles?q=renamed gem").get_json()["total"] == 0
+
+
+def test_admin_list_filters(client):
+    client.post("/api/admin/sync", json={}); _wait_job(client)
+    missing = client.get("/api/admin/titles?status=missing").get_json()
+    assert missing["total"] >= 1 and all(i["sources_status"] == "missing" for i in missing["items"])
+    assert client.get("/api/admin/titles?kind=series").get_json()["total"] == 3
+
+
+def test_admin_requires_token_when_configured(client):
+    client.appmod.ADMIN_TOKEN = "s3cret"
+    assert client.get("/api/admin/overview").status_code == 403
+    assert client.get("/api/admin/overview", headers={"X-Admin-Token": "nope"}).status_code == 403
+    assert client.get("/api/admin/overview", headers={"X-Admin-Token": "s3cret"}).status_code == 200
+    assert client.post("/api/admin/import", json={}).status_code == 403
+    assert client.get("/api/titles").status_code == 200        # public API unaffected
+
+
+def test_admin_blocked_remotely_without_token(client):
+    r = client.get("/api/admin/overview", environ_overrides={"REMOTE_ADDR": "203.0.113.9"})
+    assert r.status_code == 403 and "ADMIN_TOKEN" in r.get_json()["error"]
+
+
+def test_redirect_mode_for_stream_only(client):
+    client.appmod.PROXY_STREAM = False
+    fid = client.get("/api/titles/night-of-the-living-dead").get_json()["files"][0]["id"]
+    r = client.get(f"/api/stream/{fid}")
+    assert r.status_code == 302 and "/download/night_of_the_living_dead/" in r.headers["Location"]
+    assert client.get(f"/api/download/{fid}").status_code == 200       # downloads still proxied (named + saved, not played)

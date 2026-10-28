@@ -321,3 +321,39 @@ main.watching { padding: 0; }
 .btn.install { margin-left: 4px; }
 @media (max-width: 960px) { .btn.install { order: 2; } }
 @media (display-mode: standalone) { .header { padding-top: calc(env(safe-area-inset-top) + 14px); } }
+
+/* ---------- admin ---------- */
+.page.narrow { max-width: 520px; }
+.panel { padding: 22px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); margin-bottom: 18px; }
+.panel h3 { font-size: 20px; margin-bottom: 14px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.gate { text-align: center; display: grid; justify-items: center; gap: 8px; margin-top: 40px; color: var(--gold2); }
+.gate h1 { color: var(--text); font-size: 32px; } .gate form { display: flex; gap: 8px; width: 100%; margin-top: 6px; }
+.gate input { flex: 1; }
+.page.admin input:not([type=checkbox]), .page.admin select, .page.admin textarea, .gate input, .edit input:not([type=checkbox]), .edit textarea {
+  height: 38px; padding: 0 12px; background: var(--bg2); border: 1px solid var(--line); border-radius: 10px; color: var(--text); min-width: 0; }
+.edit textarea { height: auto; padding: 10px 12px; resize: vertical; width: 100%; font: inherit; }
+.page.admin input:focus, .gate input:focus, .edit input:focus, .edit textarea:focus { outline: 0; border-color: var(--gold); }
+.admin-stats b { font-size: 24px; } .admin-stats .wide { flex: 1; min-width: 220px; } .admin-stats b.sm { font-size: 18px; } .admin-stats small { color: var(--dim); word-break: break-all; font-size: 11px; }
+.admin-grid { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); gap: 18px; align-items: start; }
+.act { display: grid; gap: 10px; padding: 14px 0; border-top: 1px solid var(--line); }
+.act:first-of-type { border-top: 0; padding-top: 0; }
+.act strong { display: block; } .act small { display: block; color: var(--muted); font-size: 13px; }
+.act-controls { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; } .act-controls input[type=number] { width: 90px; }
+.act-controls .grow, .table-head .grow { flex: 1; min-width: 160px; } .act details { font-size: 13px; color: var(--muted); } .act summary { cursor: pointer; }
+.act .full { width: 100%; margin-top: 8px; }
+.log { margin: 0; height: 320px; overflow: auto; padding: 14px; background: #07070b; border: 1px solid var(--line); border-radius: 12px; font: 12.5px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace; color: #cfe8d5; white-space: pre-wrap; word-break: break-word; }
+.pill { display: inline-block; padding: 2px 10px; border-radius: 999px; font: 700 11.5px var(--sans); letter-spacing: .02em; background: #ffffff14; }
+.pill.ok { background: #6fcf9722; color: var(--ok); } .pill.missing, .pill.error { background: #ef6b5f22; color: var(--danger); } .pill.pending { background: #e8b04b22; color: var(--gold2); }
+.table-head { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 14px; } .table-head h3 { margin: 0; margin-right: auto; }
+.table-wrap { overflow-x: auto; }
+.tbl { width: 100%; border-collapse: collapse; font-size: 14px; }
+.tbl th { text-align: left; padding: 8px 10px; color: var(--dim); font-size: 12px; text-transform: uppercase; letter-spacing: .08em; border-bottom: 1px solid var(--line); }
+.tbl td { padding: 10px; border-bottom: 1px solid var(--line); vertical-align: middle; } .tbl td small { display: block; color: var(--muted); }
+.tbl .thumb { width: 44px; } .tbl .thumb > * { width: 36px; height: 52px; border-radius: 6px; overflow: hidden; display: block; }
+.tbl .thumb img, .tbl .thumb .poster-fallback { width: 100%; height: 100%; object-fit: cover; } .tbl .thumb .poster-fallback span, .tbl .thumb .poster-fallback svg { display: none; }
+.tbl code, .notice code { font-size: 12px; background: #ffffff10; padding: 2px 6px; border-radius: 6px; }
+.row-actions { white-space: nowrap; text-align: right; } .row-actions .icon-btn { margin-left: 6px; } .center { text-align: center; }
+.edit { display: grid; gap: 12px; } .edit label { display: grid; gap: 5px; font-size: 13px; color: var(--muted); } .edit label.check { display: flex; }
+.edit .two { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; } .edit small { color: var(--dim); }
+.modal-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 6px; }
+@media (max-width: 960px) { .admin-grid { grid-template-columns: 1fr; } }
