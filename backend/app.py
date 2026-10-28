@@ -794,9 +794,9 @@ def cli():
     if cmd == "run":
         app = create_app()
         start_background()
-        port = int(os.environ.get("PORT", 5000))
+        port = int(os.environ.get("PORT", 10000))
         print(f"CineVault running on http://localhost:{port}   (admin panel: /admin)")
-        app.run(host=os.environ.get("HOST", "127.0.0.1"), port=port, threaded=True, debug=False)
+        app.run(host=os.environ.get("HOST", "0.0.0.0"), port=port, threaded=True, debug=False)
         return
     db.init_db()
     with db.session() as conn:
