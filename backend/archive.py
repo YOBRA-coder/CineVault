@@ -360,7 +360,11 @@ PRESETS = {
     "animation": ("Animation & cartoons", "animationandcartoons"),
     "opensource_movies": ("Community films (Creative Commons)", "opensource_movies"),
     "prelinger": ("Prelinger vintage films", "prelinger"),
+    "classic_tv_series": ("Classic TV (as series)", "classic_tv"),
+    "cartoon_series": ("Cartoons (as series)", "animationandcartoons"),
+    "sci_fi_tv_series": ("Sci-fi serials (as series)", "SciFi_Horror"),
 }
+SERIES_PRESETS = {"classic_tv_series", "cartoon_series", "sci_fi_tv_series"}
 LICENSE_CLAUSE = "(licenseurl:(http*creativecommons.org/publicdomain*) OR licenseurl:(http*creativecommons.org/licenses/*))"
 IMPORT_FIELDS = ["identifier", "title", "year", "creator", "description", "subject", "downloads", "avg_rating", "num_reviews", "runtime"]
 PAGE_ROWS = 50
@@ -392,6 +396,22 @@ def map_genres(subjects):
 def _clean_html(s):
     s = re.sub(r"<[^>]+>", " ", str(s or ""))
     return re.sub(r"\s+", " ", s).strip()
+
+
+def _import_series_doc(conn, d):
+    """Series mode: keep an item only if it holds several episodes (video files); one episode per file."""
+    ident = d.get("identifier")
+    if not ident or conn.execute("SELECT 1 FROM titles WHERE ia_identifier=?", (ident,)).fetchone():
+        return None
+    meta = get_metadata(ident)
+    if not meta or len(video_groups(meta)) < 2:
+        return None
+    # add_from_identifier commits and syncs; it is fine inside the savepoint (nothing else is pending)
+    try:
+        add_from_identifier(conn, ident, "series", progress=lambda *_: None)
+    except ValueError:
+        return None
+    return _clean_html(_first(d.get("title"))) or ident
 
 
 def _import_doc(conn, d):
@@ -426,12 +446,20 @@ def _import_doc(conn, d):
     return f"{name} ({year or '?'})"
 
 
-def import_catalog(conn, limit=100, query=None, progress=print, preset="feature_films", strict=True):
+def import_catalog(conn, limit=100, query=None, progress=print, preset="feature_films", strict=True, kind=None):
     """Add up to `limit` NEW films. Pages through the results (skipping ones already in the catalog), so
     running it again keeps adding more instead of re-reading the same top results. One bad record is
     logged and skipped - it never aborts the run."""
+    kind = kind or ("series" if preset in SERIES_PRESETS else "movie")
     q = build_query(preset, strict, query)
     progress(f"Searching archive.org: {q}")
+    if strict and not query and not search_items(q, rows=1, fields=["identifier"]):
+        # most items in these collections carry no licence tag, so the strict filter matches nothing
+        strict = False
+        q = build_query(preset, False, query)
+        progress("No items in this collection are tagged public domain / CC, so importing the whole collection instead "
+                 "(almost always old public-domain material - review what you publish).")
+        progress(f"Searching archive.org: {q}")
     added = skipped = seen = 0
     for page in range(1, MAX_PAGES + 1):
         docs = search_items(q, rows=PAGE_ROWS, fields=IMPORT_FIELDS, page=page)
@@ -441,13 +469,19 @@ def import_catalog(conn, limit=100, query=None, progress=print, preset="feature_
         for d in docs:
             if added >= limit:
                 break
-            conn.execute("SAVEPOINT imp")
             try:
-                name = _import_doc(conn, d)
-                conn.execute("RELEASE imp")
+                if kind == "series":          # add_from_identifier commits per item, so no savepoint here
+                    name = _import_series_doc(conn, d)
+                else:
+                    conn.execute("SAVEPOINT imp")
+                    try:
+                        name = _import_doc(conn, d)
+                        conn.execute("RELEASE imp")
+                    except Exception:
+                        conn.execute("ROLLBACK TO imp")
+                        conn.execute("RELEASE imp")
+                        raise
             except Exception as e:  # noqa: BLE001 - keep going, report it
-                conn.execute("ROLLBACK TO imp")
-                conn.execute("RELEASE imp")
                 skipped += 1
                 progress(f"  ! skipped {d.get('identifier')}: {type(e).__name__}: {e}")
                 continue

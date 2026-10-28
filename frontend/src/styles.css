@@ -109,15 +109,15 @@ main { min-height: 100vh; }
 .rail-wrap { position: relative; }
 .rail-track { display: flex; gap: 14px; overflow-x: auto; padding: 8px var(--pad) 14px; scroll-snap-type: x proximity; scrollbar-width: none; }
 .rail-track::-webkit-scrollbar { display: none; }
-.rail-track .card { flex: 0 0 clamp(138px, 15vw, 190px); scroll-snap-align: start; }
+.rail-track .card { flex: 0 0 clamp(138px, 15vw, 190px); width: clamp(138px, 15vw, 190px); min-width: 0; max-width: clamp(138px, 15vw, 190px); scroll-snap-align: start; }
 .rail-arrow { position: absolute; top: 8px; bottom: 14px; width: 48px; border: 0; color: #fff; display: grid; place-items: center; opacity: 0; transition: opacity .2s; z-index: 2; }
 .rail-arrow.left { left: 0; background: linear-gradient(90deg, var(--bg), transparent); }
 .rail-arrow.right { right: 0; background: linear-gradient(-90deg, var(--bg), transparent); }
 .rail-wrap:hover .rail-arrow { opacity: 1; }
-.card { display: block; position: relative; }
+.card { display: block; position: relative; min-width: 0; }
 .card-art { position: relative; aspect-ratio: 2/3; background-image: linear-gradient(100deg, transparent 30%, #ffffff0a 50%, transparent 70%); background-size: 250% 100%; animation: shimmer 1.6s linear infinite; border-radius: var(--radius); overflow: hidden; background-color: var(--surface); box-shadow: 0 0 0 1px #ffffff12; transition: transform .3s cubic-bezier(.2, .8, .2, 1), box-shadow .3s; }
 .card:hover .card-art, .card:focus-visible .card-art { transform: translateY(-5px) scale(1.02); box-shadow: 0 0 0 1px #e8b04b99, 0 20px 40px #000b; }
-.card-art img, .poster-fallback { width: 100%; height: 100%; object-fit: cover; display: block; }
+.card-art img, .poster-fallback { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; object-position: center top; display: block; }
 .poster-fallback { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; padding: 14px; text-align: center; color: hsl(var(--h) 60% 80%);
   background: linear-gradient(160deg, hsl(var(--h) 45% 22%), hsl(calc(var(--h) + 40) 50% 10%)); font-family: var(--serif); font-size: 15px; line-height: 1.2; }
 .badge { position: absolute; left: 8px; top: 8px; padding: 2px 9px; border-radius: 999px; background: var(--gold); color: #1a1205; font-size: 10.5px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
@@ -127,14 +127,14 @@ main { min-height: 100vh; }
 .card:hover .card-hover, .card:focus-visible .card-hover { opacity: 1; transform: none; }
 .card-hover p { margin: 8px 0 0; font-size: 12px; line-height: 1.4; color: #ddd; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
 .play-chip { display: inline-grid; place-items: center; width: 34px; height: 34px; border-radius: 50%; background: var(--gold); color: #1a1205; }
-.card-meta { padding: 10px 2px 0; }
+.card-meta { padding: 10px 2px 0; min-width: 0; }
 .card-meta strong { display: block; font-size: 14px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .card-meta span { display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--muted); }
 .rating { display: inline-flex; align-items: center; gap: 4px; color: var(--gold2); font-weight: 700; }
 .progress { position: absolute; left: 0; right: 0; bottom: 0; height: 4px; background: #ffffff30; }
 .progress i, .preview-bar i { display: block; height: 100%; background: var(--gold); }
 .progress.inline { position: relative; width: 160px; border-radius: 2px; margin-top: 8px; overflow: hidden; }
-.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(clamp(140px, 16vw, 200px), 1fr)); gap: 24px 16px; }
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(clamp(140px, 16vw, 200px), 1fr)); grid-auto-rows: auto; gap: 24px 16px; }
 
 /* ---------- generic pages ---------- */
 .page { padding: 100px var(--pad) 60px; max-width: 1500px; margin: 0 auto; }

@@ -102,7 +102,7 @@ Rebuild the front end after editing `src/`: `cd frontend && npm install && npm r
 ```bash
 cd backend && python tests/run.py      # or: pytest tests
 ```
-38 API tests run against a strict fake archive server (search, filters, sync, range streaming, downloads, history, ratings, import, admin).
+40 API tests run against a strict fake archive server (search, filters, sync, range streaming, downloads, history, ratings, import, admin).
 
 ## Good to know
 * **Client identity**: each browser gets an anonymous id (stored in `localStorage`) – history, list and ratings follow it.

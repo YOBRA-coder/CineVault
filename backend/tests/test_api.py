@@ -85,6 +85,8 @@ class FakeIA(BaseHTTPRequestHandler):
                 docs = allq[(page - 1) * rows: page * rows]
             if "collection:coll_series" in q:
                 docs = [{"identifier": "ep_b", "title": "Episode 10"}, {"identifier": "ep_a", "title": "Episode 2"}]
+            if "collection:classic_tv" in q and "licenseurl" not in q:     # untagged collection: strict search finds nothing
+                docs = [{"identifier": "ep_a", "title": "Lone Episode"}, {"identifier": "series_item", "title": "Tiny Serial", "year": "1950"}]
             wanted = qs.get("fl[]", [])
             return self._json({"response": {"docs": [{k: v for k, v in d.items() if k in wanted} for d in docs]}})
         if u.path.startswith("/tmdb/3/"):
@@ -569,3 +571,23 @@ def test_tmdb_errors_are_friendly(client, fake_ia, monkeypatch):
     client.appmod.tmdb._cache.clear()
     r = client.get("/api/discover?q=thrones")
     assert r.status_code == 502 and "TMDB" in r.get_json()["error"]
+
+
+def test_strict_import_falls_back_when_collection_has_no_licence_tags(client):
+    import archive, db
+    with db.session() as conn:
+        logs = []
+        n = archive.import_catalog(conn, 5, preset="classic_tv", strict=True, progress=logs.append)
+        assert n == 2 and any("importing the whole collection" in l for l in logs)
+
+
+def test_series_mode_imports_multi_file_items_as_series(client):
+    import archive, db
+    with db.session() as conn:
+        logs = []
+        n = archive.import_catalog(conn, 5, preset="classic_tv_series", strict=False, progress=logs.append)
+        assert n == 1                                              # ep_a has one file, so it is not a series
+        t = conn.execute("SELECT * FROM titles WHERE ia_identifier='series_item'").fetchone()
+        assert t["kind"] == "series"
+        assert conn.execute("SELECT COUNT(*) FROM episodes WHERE title_id=?", (t["id"],)).fetchone()[0] == 3
+        assert conn.execute("SELECT COUNT(*) FROM titles WHERE ia_identifier='ep_a'").fetchone()[0] == 0

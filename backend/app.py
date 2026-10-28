@@ -2,7 +2,7 @@
 
 Run:      python app.py                 (serves API + built React app on http://localhost:5000)
 Sync:     python app.py sync            (verify archive.org items, fetch playable files)
-Import:   python app.py import 200 [preset] [--all]   (add 200 NEW films; presets: feature_films classic_tv silent_films film_noir scifi_horror animation opensource_movies prelinger; --all = don't require a PD/CC licence label)
+Import:   python app.py import 200 [preset] [--all]   (add 200 NEW films; presets: feature_films classic_tv silent_films film_noir scifi_horror animation opensource_movies prelinger classic_tv_series cartoon_series sci_fi_tv_series; --all = don't require a PD/CC licence label)
 Add one:  python app.py add <archive.org link or id> [movie|series]
 Admin UI: http://localhost:5000/admin   (set ADMIN_TOKEN to use it on a server)
 Enrich:   python app.py tmdb            (optional posters/cast from TMDB when TMDB_API_KEY is set)
@@ -684,9 +684,11 @@ def create_app():
         query = (body.get("query") or "").strip() or None
         preset = body.get("preset") if body.get("preset") in archive.PRESETS else "feature_films"
         strict = body.get("strict", True) is not False
+        kind = body.get("kind")
 
         def job(conn, log):
-            added = archive.import_catalog(conn, n, query=query, progress=log, preset=preset, strict=strict)
+            added = archive.import_catalog(conn, n, query=query, progress=log, preset=preset, strict=strict,
+                                           kind=kind if kind in ("movie", "series") else None)
             log(f"Imported {added} new titles. Checking files on archive.org…")
             res = archive.sync_all(conn, progress=log, only_stale=True)
             return {"imported": added, "sync": res}
@@ -840,7 +842,7 @@ def cli():
     if cmd == "run":
         app = create_app()
         start_background()
-        port = int(os.environ.get("PORT", 10000))
+        port = int(os.environ.get("PORT", 5000))
         print(f"CineVault running on http://localhost:{port}   (admin panel: /admin)")
         app.run(host=os.environ.get("HOST", "127.0.0.1"), port=port, threaded=True, debug=False)
         return
