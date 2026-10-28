@@ -840,7 +840,7 @@ def cli():
     if cmd == "run":
         app = create_app()
         start_background()
-        port = int(os.environ.get("PORT", 5000))
+        port = int(os.environ.get("PORT", 10000))
         print(f"CineVault running on http://localhost:{port}   (admin panel: /admin)")
         app.run(host=os.environ.get("HOST", "127.0.0.1"), port=port, threaded=True, debug=False)
         return
