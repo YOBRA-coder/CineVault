@@ -1,18 +1,42 @@
-FROM python:3.11-slim
+# Stage 1: Build the Application
+FROM python:3.11-slim AS build
 
-WORKDIR /app
+WORKDIR /usr/src/app
 
-# 1. Copy everything to the container
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create the virtual environment inside the build container
+RUN python -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+# Copy your full project directory (so backend/requirements.txt is available)
 COPY . .
 
-# 2. Install dependencies for the backend
-RUN pip install --no-cache-dir -r backend/requirements.txt
+# Install dependencies from your backend folder
+RUN pip install --upgrade pip && \
+    pip install -r backend/requirements.txt
 
-# 3. Expose the port your python app runs on (Render defaults to 10000, change if your app uses 5000 or 8080)
-EXPOSE 10000
+# Stage 2: Create the Final Production Image
+FROM python:3.11-slim
 
-# 4. Environment variable to ensure output isn't buffered
+WORKDIR /usr/src/app
+
+# Copy the environment and project code from the builder stage
+COPY --from=build /opt/venv /opt/venv
+COPY --from=build /usr/src/app .
+
+ENV PATH="/opt/venv/bin:$PATH"
 ENV PYTHONUNBUFFERED=1
 
-# 5. Run the application from the backend folder
+# Create a non-root user for security
+RUN useradd -m -u 1000 appuser && chown -R appuser:appuser /usr/src/app
+USER appuser
+
+# Set the fallback port (matching Render's 10000 or custom)
+ENV PORT=10000
+EXPOSE $PORT
+
+# CORRECTED: Point to your backend app file
 CMD ["python", "backend/app.py"]
