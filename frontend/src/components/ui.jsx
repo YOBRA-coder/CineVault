@@ -142,7 +142,25 @@ export function Grid({ items, onListChange }) {
 
 export function Rail({ title, items, to }) {
   const ref = useRef(null);
+  const drag = useRef({ down: false, x: 0, left: 0, moved: false });
   const scroll = (dir) => ref.current?.scrollBy({ left: dir * ref.current.clientWidth * 0.85, behavior: 'smooth' });
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return undefined;
+    const down = (e) => { if (e.pointerType !== 'mouse' || e.button !== 0) return; drag.current = { down: true, x: e.clientX, left: el.scrollLeft, moved: false }; };
+    const move = (e) => {
+      const d = drag.current;
+      if (!d.down) return;
+      const dx = e.clientX - d.x;
+      if (Math.abs(dx) > 6) { d.moved = true; el.classList.add('dragging'); }
+      if (d.moved) el.scrollLeft = d.left - dx;
+    };
+    const up = () => { drag.current.down = false; el.classList.remove('dragging'); };
+    const click = (e) => { if (drag.current.moved) { e.preventDefault(); e.stopPropagation(); drag.current.moved = false; } };
+    el.addEventListener('pointerdown', down); window.addEventListener('pointermove', move); window.addEventListener('pointerup', up);
+    el.addEventListener('click', click, true); el.addEventListener('dragstart', (e) => e.preventDefault());
+    return () => { el.removeEventListener('pointerdown', down); window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up); el.removeEventListener('click', click, true); };
+  }, [items.length]);
   if (!items.length) return null;
   return (
     <section className="rail">
@@ -152,7 +170,10 @@ export function Rail({ title, items, to }) {
       </div>
       <div className="rail-wrap">
         <button className="rail-arrow left" onClick={() => scroll(-1)} aria-label="Scroll left"><Icon name="left" /></button>
-        <div className="rail-track" ref={ref}>{items.map((i) => <Card key={i.id} item={i} />)}</div>
+        <div className="rail-track" ref={ref}>
+          {items.map((i) => <Card key={i.id} item={i} />)}
+          {to && <Link to={to} className="see-all-tile"><span><Icon name="right" size={26} />See all</span></Link>}
+        </div>
         <button className="rail-arrow right" onClick={() => scroll(1)} aria-label="Scroll right"><Icon name="right" /></button>
       </div>
     </section>

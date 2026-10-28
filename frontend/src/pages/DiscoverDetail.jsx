@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react';
-import { Empty, Icon, Modal, Poster, Rating, Spinner, useFetch } from '../components/ui.jsx';
-import { Link } from '../router.jsx';
+import { Empty, Icon, Modal, Poster, Rating, Spinner, toast, useFetch } from '../components/ui.jsx';
+import TrailerModal from '../components/TrailerModal.jsx';
+import { adm, getToken } from '../adminApi.js';
+import { Link, navigate } from '../router.jsx';
 import { fmtRuntime } from '../util.js';
 
 const REGIONS = [['US', 'United States'], ['GB', 'United Kingdom'], ['KE', 'Kenya'], ['NG', 'Nigeria'], ['ZA', 'South Africa'], ['UG', 'Uganda'], ['TZ', 'Tanzania'],
@@ -16,6 +18,7 @@ export default function DiscoverDetail({ kind, id }) {
   const [region, setRegion] = useState(initialRegion);
   const [{ data: t, loading, error }] = useFetch(`/discover/${kind}/${id}?region=${region}`);
   const [trailer, setTrailer] = useState(false);
+  const [adding, setAdding] = useState(false);
   useEffect(() => { try { localStorage.setItem('cv_region', region); } catch { /* ignore */ } }, [region]);
   useEffect(() => { if (t) document.title = `${t.name}${t.year ? ` (${t.year})` : ''} — CineVault`; }, [t?.id]); // eslint-disable-line
 
@@ -44,6 +47,8 @@ export default function DiscoverDetail({ kind, id }) {
           <div className="actions">
             {t.library_slug && <Link to={`/title/${t.library_slug}`} className="btn primary lg"><Icon name="play" fill size={20} />Watch free in CineVault</Link>}
             {t.trailer && <button className={`btn lg ${t.library_slug ? 'ghost' : 'primary'}`} onClick={() => setTrailer(true)}><Icon name="play" fill size={20} />Watch trailer</button>}
+            {!t.trailer && <span className="muted small">No trailer listed yet.</span>}
+            {getToken() && !t.library_slug && <button className="btn ghost lg" onClick={() => setAdding(true)}><Icon name="plus" size={20} />Add to library</button>}
           </div>
         </div>
       </div>
@@ -87,11 +92,34 @@ export default function DiscoverDetail({ kind, id }) {
         )}
       </div>
 
-      {trailer && (
-        <Modal onClose={() => setTrailer(false)} wide label={`${t.name} trailer`}>
-          <div className="trailer"><iframe src={`https://www.youtube-nocookie.com/embed/${t.trailer}?autoplay=1&rel=0`} title={`${t.name} trailer`} allow="autoplay; encrypted-media; picture-in-picture; fullscreen" allowFullScreen /></div>
-        </Modal>
-      )}
+      {trailer && <TrailerModal ytKey={t.trailer} title={t.name} onClose={() => setTrailer(false)} />}
+      {adding && <AddToLibrary t={t} kind={kind} onClose={() => setAdding(false)} />}
     </div>
+  );
+}
+
+function AddToLibrary({ t, kind, onClose }) {
+  const [links, setLinks] = useState([{ label: '', url: '' }]);
+  const [busy, setBusy] = useState(false);
+  const up = (i, k) => (e) => setLinks(links.map((l, n) => (n === i ? { ...l, [k]: e.target.value } : l)));
+  async function save(e) {
+    e.preventDefault(); setBusy(true);
+    try {
+      const r = await adm('POST', '/discover-add', { kind, tmdb_id: t.id, links: links.filter((l) => l.url.trim()) });
+      toast(`Added “${t.name}” to the library`); navigate(`/title/${r.slug}`);
+    } catch (err) { toast(err.message, 'error'); setBusy(false); }
+  }
+  return (
+    <Modal onClose={onClose} label="Add to library">
+      <form className="dl edit" onSubmit={save}>
+        <h3>Add “{t.name}” to your library</h3>
+        <p className="fine">This adds the details, cast and trailer. Paste official, <b>legal</b> places to watch it (YouTube Movies, Tubi, Pluto TV, a broadcaster…) and visitors get a button for each. Only link to sources that have the right to show it.</p>
+        {links.map((l, i) => (
+          <div className="two" key={i}><input placeholder="Label (e.g. Tubi)" value={l.label} onChange={up(i, 'label')} aria-label="Link label" /><input placeholder="https://…" value={l.url} onChange={up(i, 'url')} aria-label="Link URL" /></div>
+        ))}
+        <button type="button" className="btn ghost sm" onClick={() => setLinks([...links, { label: '', url: '' }])}><Icon name="plus" size={15} />Another link</button>
+        <div className="modal-actions"><button type="button" className="btn ghost" onClick={onClose}>Cancel</button><button className="btn primary" disabled={busy}>{busy ? 'Adding…' : 'Add to library'}</button></div>
+      </form>
+    </Modal>
   );
 }

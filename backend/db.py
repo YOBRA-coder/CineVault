@@ -125,6 +125,15 @@ CREATE TABLE IF NOT EXISTS downloads (
 );
 CREATE INDEX IF NOT EXISTS idx_downloads_client ON downloads(client_id, created_at DESC);
 
+CREATE TABLE IF NOT EXISTS watch_links (          -- extra legal places to watch/stream a title (added by the admin)
+    id INTEGER PRIMARY KEY,
+    title_id INTEGER NOT NULL REFERENCES titles(id) ON DELETE CASCADE,
+    label TEXT NOT NULL,
+    url TEXT NOT NULL,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_watch_links_title ON watch_links(title_id);
+
 CREATE TABLE IF NOT EXISTS deleted_slugs (slug TEXT PRIMARY KEY);   -- admin-deleted seed titles stay deleted
 
 CREATE TABLE IF NOT EXISTS searches (

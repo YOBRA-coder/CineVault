@@ -17,7 +17,7 @@ export default function Home() {
         </div>
         {data.continue.length > 0 && <Rail title="Continue watching" items={data.continue} to="/history" />}
         {data.rails.map((r) => <Rail key={r.key} title={r.title} items={r.items}
-          to={r.key.startsWith('genre-') ? `/browse?genre=${encodeURIComponent(r.title)}` : r.key === 'series' ? '/browse?kind=series' : r.key === 'top' ? '/browse?sort=rating' : r.key === 'new' ? '/browse?sort=newest' : '/browse'} />)}
+          to={r.key.startsWith('genre-') ? `/browse?genre=${encodeURIComponent(r.title)}` : r.key === 'series' ? '/browse?kind=series' : r.key === 'top' ? '/browse?sort=rating' : r.key === 'new' ? '/browse?sort=newest' : r.key === 'latest' ? '/browse?sort=year_desc' : '/browse'} />)}
       </div>
     </>
   );

@@ -265,17 +265,18 @@ def create_app():
 
         hero = g.db.execute("SELECT * FROM titles WHERE featured=1 ORDER BY popularity DESC LIMIT 6").fetchall()
         rails = [
-            rail("trending", "Trending now", "SELECT * FROM titles ORDER BY popularity DESC LIMIT 16"),
-            rail("series", "Series & serials", "SELECT * FROM titles WHERE kind='series' ORDER BY popularity DESC LIMIT 16"),
-            rail("top", "Top rated", "SELECT * FROM titles WHERE votes>=1000 ORDER BY rating DESC LIMIT 16"),
-            rail("new", "Recently added", "SELECT * FROM titles ORDER BY added_at DESC, id DESC LIMIT 16"),
+            rail("trending", "Trending now", "SELECT * FROM titles ORDER BY popularity DESC LIMIT 30"),
+            rail("series", "Series & serials", "SELECT * FROM titles WHERE kind='series' ORDER BY popularity DESC LIMIT 30"),
+            rail("top", "Top rated", "SELECT * FROM titles WHERE votes>=1000 ORDER BY rating DESC LIMIT 30"),
+            rail("latest", "Newest releases", "SELECT * FROM titles WHERE year IS NOT NULL ORDER BY year DESC, popularity DESC LIMIT 30"),
+            rail("new", "Recently added", "SELECT * FROM titles ORDER BY added_at DESC, id DESC LIMIT 30"),
         ]
         for gr in g.db.execute(
             """SELECT ge.name FROM genres ge JOIN title_genres tg ON tg.genre_id=ge.id
                GROUP BY ge.id HAVING COUNT(*)>=3 ORDER BY COUNT(*) DESC LIMIT 5"""):
             rails.append(rail(f"genre-{gr['name']}", gr["name"],
                               """SELECT t.* FROM titles t JOIN title_genres tg ON tg.title_id=t.id
-                                 JOIN genres ge ON ge.id=tg.genre_id WHERE ge.name=? ORDER BY t.rating DESC LIMIT 16""", (gr["name"],)))
+                                 JOIN genres ge ON ge.id=tg.genre_id WHERE ge.name=? ORDER BY t.rating DESC LIMIT 30""", (gr["name"],)))
         out = {"hero": card_rows(hero), "rails": [r for r in rails if r],
                "stats": dict(g.db.execute("SELECT SUM(kind='movie') AS movies, SUM(kind='series') AS series FROM titles").fetchone())}
         out["continue"] = continue_watching() if g.cid else []
@@ -296,6 +297,24 @@ def create_app():
             abort(404 if code == 404 else 502, "TMDB rejected the request - check TMDB_API_KEY" if code == 401 else "TMDB lookup failed")
         except requests.RequestException:
             abort(502, "Couldn't reach TMDB right now")
+
+    @app.get("/api/discover/browse")
+    def discover_browse():
+        if not tmdb.enabled():
+            return jsonify(enabled=False, items=[], page=1, pages=1)
+        a = request.args
+        kind = "series" if a.get("kind") == "series" else "movie"
+        sort = a.get("sort") if a.get("sort") in ("popular", "top", "latest", "trending", "now") else "popular"
+        d = tmdb_call(tmdb.browse, kind, sort, a.get("year"), a.get("genre"), a.get("page", 1, type=int))
+        for i in d["items"]:
+            i["library_slug"] = in_library(i["name"], i["year"])
+        return jsonify(enabled=True, kind=kind, sort=sort, **d)
+
+    @app.get("/api/discover/genres")
+    def discover_genres():
+        if not tmdb.enabled():
+            return jsonify([])
+        return jsonify(tmdb_call(tmdb.genres, "series" if request.args.get("kind") == "series" else "movie"))
 
     @app.get("/api/discover")
     def discover():
@@ -368,10 +387,19 @@ def create_app():
             archive_url=archive.details_url(t["ia_identifier"]) if t["ia_identifier"] else None,
             source_url=t["source_url"],
             archive_error=archive_error,
+            links=[dict(r) for r in g.db.execute("SELECT id, label, url FROM watch_links WHERE title_id=? ORDER BY id", (t["id"],))],
             seasons=sorted({e["season"] for e in episodes}),
             preview_start=int(min(max((t["runtime"] or 20) * 60 * 0.12, 20), 300)),
         )
         return jsonify(card)
+
+    @app.get("/api/titles/<ref>/trailer")
+    def title_trailer(ref):
+        """Trailer preview for any title in the library (needs TMDB_API_KEY)."""
+        t = find_title(ref)
+        if not tmdb.enabled():
+            return jsonify(enabled=False, key=None)
+        return jsonify(enabled=True, key=tmdb_call(tmdb.find_trailer, t["name"], t["year"], t["kind"]))
 
     @app.get("/api/titles/<ref>/similar")
     def similar(ref):
@@ -776,6 +804,62 @@ def create_app():
             db.rebuild_fts(g.db, tid)
         return jsonify(ok=True)
 
+    def clean_link(body):
+        label, url = (body.get("label") or "").strip()[:60], (body.get("url") or "").strip()
+        if not re.match(r"^https?://[^\s]+\.[^\s]+$", url):
+            abort(400, "Enter a full link starting with http:// or https://")
+        return label or re.sub(r"^https?://(www\.)?", "", url).split("/")[0], url
+
+    @app.post("/api/admin/titles/<int:tid>/links")
+    def admin_add_link(tid):
+        need_admin()
+        find_title(tid)
+        label, url = clean_link(request.get_json(silent=True) or {})
+        cur = g.db.execute("INSERT INTO watch_links(title_id, label, url) VALUES (?,?,?)", (tid, label, url))
+        return jsonify(id=cur.lastrowid, label=label, url=url), 201
+
+    @app.delete("/api/admin/links/<int:lid>")
+    def admin_delete_link(lid):
+        need_admin()
+        g.db.execute("DELETE FROM watch_links WHERE id=?", (lid,))
+        return jsonify(ok=True)
+
+    @app.get("/api/admin/titles/<int:tid>/links")
+    def admin_list_links(tid):
+        need_admin()
+        return jsonify([dict(r) for r in g.db.execute("SELECT id, label, url FROM watch_links WHERE title_id=? ORDER BY id", (tid,))])
+
+    @app.post("/api/admin/discover-add")
+    def admin_discover_add():
+        """Put any TMDB movie/series into the library as a 'link-only' title with legal watch links (no files)."""
+        need_admin()
+        body = request.get_json(silent=True) or {}
+        kind = "series" if body.get("kind") == "series" else "movie"
+        if not tmdb.enabled():
+            abort(400, "Set TMDB_API_KEY first")
+        d = tmdb_call(tmdb.details, kind, body.get("tmdb_id") or 0, "US")
+        if in_library(d["name"], d["year"]):
+            abort(400, "That title is already in the library")
+        links = [clean_link(x) for x in (body.get("links") or []) if x and x.get("url")]
+        slug = catalog.unique_slug(g.db, catalog.slugify(f"{d['name']}-{d['year']}" if d["year"] else d["name"]))
+        cur = g.db.execute(
+            """INSERT INTO titles(slug, kind, name, year, description, rating, votes, runtime, director, poster_url, backdrop_url,
+                 tagline, popularity, license, sources_status, sources_checked_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?, 'ok', CURRENT_TIMESTAMP)""",
+            (slug, kind, d["name"], d["year"], d["overview"] or "No description available.", d["rating"], d["votes"], d["runtime"],
+             (d["people"] or [None])[0], (d["poster"] or "").replace("/w342/", "/w500/") or None, d["backdrop"], d["tagline"],
+             catalog.popularity(d["rating"], d["votes"]), "External (legal link)"))
+        tid = cur.lastrowid
+        catalog.set_genres(g.db, tid, d["genres"] or ["Drama"])
+        for p_ in d["people"][:1]:
+            catalog.set_credit(g.db, tid, p_, "director")
+        for i, c in enumerate(d["cast"]):
+            catalog.set_credit(g.db, tid, c["name"], "cast", c["character"], i, c["photo"])
+        for label, url in links:
+            g.db.execute("INSERT INTO watch_links(title_id, label, url) VALUES (?,?,?)", (tid, label, url))
+        db.rebuild_fts(g.db, tid)
+        return jsonify(id=tid, slug=slug), 201
+
     @app.delete("/api/admin/titles/<int:tid>")
     def admin_delete_title(tid):
         need_admin()
@@ -823,6 +907,7 @@ def start_background():
     """Optional first-boot work, used by `python app.py` and by gunicorn (wsgi.py):
     AUTO_IMPORT=N  import N public-domain films once (when none were imported yet)
     AUTO_SYNC=1    verify stale titles against archive.org
+    AUTO_UPDATE_HOURS=24   every N hours import the newest Creative Commons uploads (off when 0)
     """
     def bg():
         try:
@@ -834,6 +919,15 @@ def start_background():
                     archive.sync_all(conn, progress=lambda *_: None, only_stale=True)
         except Exception as e:
             print(f"[background] {type(e).__name__}: {e}", file=sys.stderr)
+        hours = float(os.environ.get("AUTO_UPDATE_HOURS", "0") or 0)
+        while hours > 0:                         # keep the library fresh: newest CC uploads every N hours
+            time.sleep(hours * 3600)
+            try:
+                with db.session() as conn:
+                    archive.import_catalog(conn, 20, preset="recent_cc", progress=lambda *_: None)
+                    archive.sync_all(conn, progress=lambda *_: None, only_stale=True)
+            except Exception as e:
+                print(f"[auto-update] {type(e).__name__}: {e}", file=sys.stderr)
     threading.Thread(target=bg, daemon=True).start()
 
 
@@ -842,7 +936,7 @@ def cli():
     if cmd == "run":
         app = create_app()
         start_background()
-        port = int(os.environ.get("PORT", 10000))
+        port = int(os.environ.get("PORT", 5000))
         print(f"CineVault running on http://localhost:{port}   (admin panel: /admin)")
         app.run(host=os.environ.get("HOST", "127.0.0.1"), port=port, threaded=True, debug=False)
         return

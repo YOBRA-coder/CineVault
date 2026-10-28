@@ -1,20 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Icon, Modal, Poster, toast } from '../components/ui.jsx';
-import { CID } from '../api.js';
+import { adm, getToken, tokenKey } from '../adminApi.js';
 import { ago } from '../util.js';
-
-const tokenKey = 'cv_admin';
-const getToken = () => { try { return sessionStorage.getItem(tokenKey) || ''; } catch { return ''; } };
-
-async function adm(method, path, body) {
-  const r = await fetch('/api/admin' + path, {
-    method, headers: { 'Content-Type': 'application/json', 'X-Client-Id': CID, 'X-Admin-Token': getToken() },
-    body: body === undefined ? undefined : JSON.stringify(body),
-  });
-  const data = await r.json().catch(() => ({}));
-  if (!r.ok) { const e = new Error(data.error || r.statusText); e.status = r.status; throw e; }
-  return data;
-}
 
 const STATUS = { ok: ['ok', 'Has files'], missing: ['missing', 'Not on archive'], error: ['error', 'Archive error'], pending: ['pending', 'Not checked'] };
 
@@ -115,6 +102,8 @@ function Actions({ ov, reload }) {
           <input type="number" min="1" max="500" value={limit} onChange={(e) => setLimit(e.target.value)} aria-label="How many" />
           <button className="btn primary sm" disabled={running} onClick={() => start('/import', { limit: Number(limit), query, preset, strict }, 'Import started')}><Icon name="download" size={16} />Import</button>
         </div>
+        <div className="act-controls"><button className="btn ghost sm" disabled={running} onClick={() => start('/import', { limit: 20, preset: 'recent_cc', strict: true }, 'Fetching the newest uploads')}><Icon name="refresh" size={16} />Fetch latest uploads now</button>
+          <small>Newest Creative Commons films on archive.org. Set <code>AUTO_UPDATE_HOURS=24</code> to do this automatically.</small></div>
         <label className="check"><input type="checkbox" checked={strict} onChange={(e) => setStrict(e.target.checked)} />Only items archive.org marks as public domain / Creative Commons</label>
         {!strict && <small>Includes the whole collection. These are almost always old public-domain classics hosted by archive.org, but rights aren’t guaranteed for every single upload — review what you publish.</small>}
         <details><summary>Custom archive.org search (optional)</summary>
@@ -227,8 +216,35 @@ function EditModal({ t, onClose, onSave }) {
         <label>Poster URL<input value={v.poster_url} onChange={up('poster_url')} placeholder="https://…" /></label>
         <label>Description<textarea rows="4" value={v.description} onChange={up('description')} /></label>
         <label className="check"><input type="checkbox" checked={v.featured} onChange={up('featured')} />Feature on the home page hero</label>
+        <WatchLinks tid={t.id} />
         <div className="modal-actions"><button type="button" className="btn ghost" onClick={onClose}>Cancel</button><button className="btn primary">Save</button></div>
       </form>
     </Modal>
+  );
+}
+
+
+function WatchLinks({ tid }) {
+  const [links, setLinks] = useState([]);
+  const [label, setLabel] = useState('');
+  const [url, setUrl] = useState('');
+  const load = useCallback(() => adm('GET', `/titles/${tid}/links`).then(setLinks).catch(() => {}), [tid]);
+  useEffect(() => { load(); }, [load]);
+  async function add() {
+    try { await adm('POST', `/titles/${tid}/links`, { label, url }); setLabel(''); setUrl(''); toast('Link added'); load(); }
+    catch (e) { toast(e.message, 'error'); }
+  }
+  return (
+    <div className="links-admin">
+      <strong>Legal places to watch</strong>
+      <small>Add an official, legal page for this title (YouTube Movies, Tubi, Pluto TV, Plex, a broadcaster, a library service…). Visitors see it as a button on the title page.</small>
+      {links.map((l) => (
+        <div key={l.id} className="link-row"><a href={l.url} target="_blank" rel="noreferrer">{l.label}</a><span>{l.url}</span>
+          <button type="button" className="icon-btn" aria-label="Remove link" onClick={async () => { await adm('DELETE', `/links/${l.id}`); load(); }}><Icon name="trash" size={15} /></button></div>
+      ))}
+      <div className="two"><input placeholder="Label (e.g. Tubi)" value={label} onChange={(e) => setLabel(e.target.value)} aria-label="Link label" />
+        <input placeholder="https://…" value={url} onChange={(e) => setUrl(e.target.value)} aria-label="Link URL" /></div>
+      <button type="button" className="btn ghost sm" disabled={!url} onClick={add}><Icon name="plus" size={15} />Add link</button>
+    </div>
   );
 }

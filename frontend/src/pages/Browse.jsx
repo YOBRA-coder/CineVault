@@ -3,7 +3,7 @@ import { Empty, Grid, Icon, Spinner, useFetch } from '../components/ui.jsx';
 import { api } from '../api.js';
 import { Link, navigate, setParams, useLocation } from '../router.jsx';
 
-const SORTS = [['popular', 'Popular'], ['rating', 'Top rated'], ['newest', 'Recently added'], ['year_desc', 'Year: newest'], ['year_asc', 'Year: oldest'], ['az', 'A–Z']];
+const SORTS = [['popular', 'Popular'], ['rating', 'Top rated'], ['newest', 'Recently added to CineVault'], ['year_desc', 'Release date: newest'], ['year_asc', 'Release date: oldest'], ['az', 'A–Z']];
 const ERAS = [['', 'Any year'], ['1900-1929', 'Silent era (–1929)'], ['1930-1949', '1930s–40s'], ['1950-1969', '1950s–60s'], ['1970-2030', '1970 +']];
 
 export default function Browse() {

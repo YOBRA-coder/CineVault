@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Empty, Icon, ListButton, Poster, Rail, Rating, Spinner, Stars, toast, useFetch } from '../components/ui.jsx';
+import TrailerModal from '../components/TrailerModal.jsx';
+import { youtubeId } from '../adminApi.js';
 import DownloadModal from '../components/DownloadModal.jsx';
 import PreviewModal from '../components/PreviewModal.jsx';
 import { Link } from '../router.jsx';
@@ -11,6 +13,9 @@ export default function Detail({ slug }) {
   const [{ data: similar }] = useFetch(`/titles/${slug}/similar`);
   const [tab, setTab] = useState('episodes');
   const [season, setSeason] = useState(1);
+  const [{ data: health }] = useFetch('/health');
+  const [trailerKey, setTrailerKey] = useState(null);
+  const [embed, setEmbed] = useState(null);
   const [modal, setModal] = useState(null); // {type:'download'|'preview', files, heading}
 
   useEffect(() => { if (t) { document.title = `${t.name} (${t.year}) — CineVault`; setSeason(t.mine?.last?.episode_id ? (t.episodes.find((e) => e.id === t.mine.last.episode_id)?.season || 1) : (t.seasons[0] || 1)); setTab(t.kind === 'series' ? 'episodes' : 'cast'); } }, [t?.id]); // eslint-disable-line
@@ -36,6 +41,12 @@ export default function Detail({ slug }) {
   async function rate(stars) {
     try { await api.post(`/titles/${t.slug}/rate`, { stars }); setT({ ...t, mine: { ...t.mine, rating: stars } }); toast(stars ? `You rated it ${stars}★` : 'Rating removed'); }
     catch (e) { toast(e.message, 'error'); }
+  }
+  async function trailer() {
+    try {
+      const r = await api.get(`/titles/${t.slug}/trailer`);
+      r.key ? setTrailerKey(r.key) : toast(r.enabled ? 'No trailer is listed for this title' : 'Trailers need a TMDB key', 'error');
+    } catch (e) { toast(e.message, 'error'); }
   }
   async function recheck() {
     toast('Checking the archive…');
@@ -66,13 +77,28 @@ export default function Detail({ slug }) {
           <div className="actions">
             {playable.length > 0
               ? <Link to={playHref} className="btn primary lg"><Icon name="play" fill size={20} />{playLabel}</Link>
-              : <button className="btn primary lg" disabled><Icon name="play" fill size={20} />Unavailable</button>}
+              : t.links.length > 0
+                ? <a href={t.links[0].url} target="_blank" rel="noreferrer" className="btn primary lg"><Icon name="play" fill size={20} />Watch on {t.links[0].label}</a>
+                : <button className="btn primary lg" disabled><Icon name="play" fill size={20} />Unavailable</button>}
+            {health?.tmdb && <button className="btn ghost lg" onClick={trailer}><Icon name="play" size={20} />Trailer</button>}
             {previewFile && <button className="btn ghost lg" onClick={() => setModal({ type: 'preview' })}><Icon name="eye" size={20} />Preview</button>}
             <button className="btn ghost lg" onClick={() => setModal({ type: 'download', files: bestFiles, heading: t.name, season: isSeries ? 0 : undefined, bulk: isSeries })} disabled={!allFiles.length}><Icon name="download" size={20} />Download</button>
             <ListButton item={t} label size="lg" />
           </div>
 
-          {!allFiles.length && (
+          {t.links.length > 0 && (
+            <div className="legal-links">
+              <span>{allFiles.length ? 'Also watch legally on' : 'Watch legally on'}</span>
+              {t.links.map((l) => (
+                <span className="legal-link" key={l.id}>
+                  <a href={l.url} target="_blank" rel="noreferrer" className="btn ghost sm">{l.label} <Icon name="ext" size={13} /></a>
+                  {youtubeId(l.url) && <button className="icon-btn" aria-label={`Play ${l.label} here`} title="Play here" onClick={() => setEmbed({ id: youtubeId(l.url), label: l.label })}><Icon name="play" size={14} fill /></button>}
+                </span>
+              ))}
+            </div>
+          )}
+
+          {!allFiles.length && !t.links.length && (
             <div className="notice">
               {t.sources_status === 'error' ? 'The archive couldn’t be reached just now.' : 'We couldn’t find a downloadable copy of this title on the archive yet.'}{' '}
               <button className="link" onClick={recheck}>Check again</button>
@@ -151,6 +177,8 @@ export default function Detail({ slug }) {
 
       {similar?.length > 0 && <div className="rails"><Rail title="More like this" items={similar} /></div>}
 
+      {trailerKey && <TrailerModal ytKey={trailerKey} title={t.name} onClose={() => setTrailerKey(null)} />}
+      {embed && <TrailerModal ytKey={embed.id} title={`${t.name} on ${embed.label}`} onClose={() => setEmbed(null)} />}
       {modal?.type === 'download' && <DownloadModal title={t} files={modal.files} heading={modal.heading} season={modal.season} bulk={modal.bulk} onClose={() => setModal(null)} />}
       {modal?.type === 'preview' && previewFile && <PreviewModal title={t} file={previewFile} start={t.preview_start} onClose={() => setModal(null)} />}
     </div>

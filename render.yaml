@@ -24,6 +24,8 @@ services:
         value: "300"
       - key: AUTO_SYNC
         value: "1"
+      - key: AUTO_UPDATE_HOURS     # every N hours import the newest Creative Commons uploads (0 = off)
+        value: "24"
       - key: PROXY_STREAM          # 0 = playback goes straight from archive.org (saves your bandwidth)
         value: "0"
       - key: PROXY_DOWNLOAD        # 1 = downloads are saved with proper names through your server

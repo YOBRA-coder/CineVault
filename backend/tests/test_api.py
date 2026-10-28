@@ -103,6 +103,20 @@ class FakeIA(BaseHTTPRequestHandler):
                 return self._json({"results": res, "total_pages": 1, "total_results": len(res)})
             if p == "/trending/all/week":
                 return self._json({"results": [{"id": 1399, "media_type": "tv", "name": "Game of Thrones", "first_air_date": "2011-04-17", "vote_average": 8.4}]})
+            if p == "/discover/movie":
+                LAST_TMDB["discover"] = parse_qs(u.query)
+                return self._json({"results": [{"id": 77, "title": "Fresh Release", "release_date": "2026-09-01", "poster_path": "/f.jpg", "overview": "new", "vote_average": 7.1, "vote_count": 90},
+                                               {"id": 78, "title": "No Poster", "release_date": "2026-09-02"}], "total_pages": 3, "total_results": 40})
+            if p == "/genre/movie/list":
+                return self._json({"genres": [{"id": 28, "name": "Action"}, {"id": 18, "name": "Drama"}]})
+            if p == "/search/movie":
+                return self._json({"results": [{"id": 19, "title": "Metropolis"}]})
+            if p == "/movie/19/videos":
+                return self._json({"results": [{"site": "YouTube", "type": "Trailer", "key": "METROKEY", "official": True}]})
+            if p == "/movie/77":
+                return self._json({"id": 77, "title": "Fresh Release", "release_date": "2026-09-01", "overview": "A brand new film about testing.", "poster_path": "/f.jpg",
+                                   "backdrop_path": "/fb.jpg", "vote_average": 7.1, "vote_count": 90, "runtime": 101, "genres": [{"name": "Thriller"}],
+                                   "credits": {"cast": [{"name": "Test Actor", "character": "Hero"}], "crew": [{"job": "Director", "name": "Dee Rector"}]}, "videos": {"results": []}})
             if p == "/tv/1399":
                 return self._json({"id": 1399, "name": "Game of Thrones", "first_air_date": "2011-04-17", "overview": "Nine noble families fight for control.",
                                    "tagline": "Winter Is Coming", "poster_path": "/got.jpg", "backdrop_path": "/gotb.jpg", "vote_average": 8.4, "vote_count": 25000,
@@ -591,3 +605,61 @@ def test_series_mode_imports_multi_file_items_as_series(client):
         assert t["kind"] == "series"
         assert conn.execute("SELECT COUNT(*) FROM episodes WHERE title_id=?", (t["id"],)).fetchone()[0] == 3
         assert conn.execute("SELECT COUNT(*) FROM titles WHERE ia_identifier='ep_a'").fetchone()[0] == 0
+
+
+def test_discover_browse_sort_year_genre_and_genres(client, fake_ia, monkeypatch):
+    _tmdb_client(client, fake_ia, monkeypatch)
+    r = client.get("/api/discover/browse?kind=movie&sort=latest&year=2026&genre=28&page=2").get_json()
+    assert [i["name"] for i in r["items"]] == ["Fresh Release"]            # items without a poster are dropped
+    assert r["pages"] == 3 and r["page"] == 2
+    q = LAST_TMDB["discover"]
+    assert q["sort_by"] == ["primary_release_date.desc"] and q["primary_release_year"] == ["2026"] and q["with_genres"] == ["28"]
+    assert "primary_release_date.lte" in q                                  # latest = already released
+    client.get("/api/discover/browse?kind=movie&sort=top")
+    assert LAST_TMDB["discover"]["sort_by"] == ["vote_average.desc"] and LAST_TMDB["discover"]["vote_count.gte"] == ["500"]
+    assert client.get("/api/discover/genres?kind=movie").get_json()[0] == {"id": 28, "name": "Action"}
+
+
+def test_discover_browse_disabled_without_key(client):
+    assert client.get("/api/discover/browse").get_json()["enabled"] is False
+
+
+def test_library_title_trailer_via_tmdb(client, fake_ia, monkeypatch):
+    assert client.get("/api/titles/metropolis/trailer").get_json() == {"enabled": False, "key": None}
+    _tmdb_client(client, fake_ia, monkeypatch)
+    assert client.get("/api/titles/metropolis/trailer").get_json() == {"enabled": True, "key": "METROKEY"}
+
+
+def test_admin_watch_links_and_link_only_title(client, fake_ia, monkeypatch):
+    client.appmod.ADMIN_TOKEN = "tok"
+    h = {"X-Admin-Token": "tok"}
+    assert client.post("/api/admin/titles/1/links", json={"url": "x"}, headers=h).status_code == 400
+    assert client.post("/api/admin/titles/1/links", json={"url": "javascript:alert(1)"}, headers=h).status_code == 400
+    r = client.post("/api/admin/titles/1/links", json={"label": "YouTube Movies", "url": "https://www.youtube.com/watch?v=abc"}, headers=h)
+    assert r.status_code == 201
+    slug = client.get("/api/titles?per=1").get_json()["items"][0]["slug"]
+    assert client.get("/api/titles/1").get_json()["links"][0]["label"] == "YouTube Movies"
+    assert client.post("/api/admin/titles/1/links", json={"url": "https://a.example.com"}).status_code == 403
+    client.delete(f"/api/admin/links/{r.get_json()['id']}", headers=h)
+    assert client.get("/api/titles/1").get_json()["links"] == []
+    # link-only title from TMDB
+    _tmdb_client(client, fake_ia, monkeypatch)
+    a = client.post("/api/admin/discover-add", json={"kind": "movie", "tmdb_id": 77, "links": [{"label": "Official", "url": "https://tubitv.com/movies/1"}]}, headers=h)
+    assert a.status_code == 201, a.get_json()
+    d = client.get(f"/api/titles/{a.get_json()['slug']}").get_json()
+    assert d["name"] == "Fresh Release" and d["links"][0]["url"].startswith("https://tubitv.com") and d["files"] == []
+    assert d["cast"][0]["name"] == "Test Actor" and d["directors"] == ["Dee Rector"] and d["license"].startswith("External")
+    assert client.post("/api/admin/discover-add", json={"kind": "movie", "tmdb_id": 77}, headers=h).status_code == 400   # already there
+    assert client.get("/api/titles?q=fresh").get_json()["items"][0]["name"] == "Fresh Release"
+    import archive, db
+    with db.session() as conn:                                             # a full sync must not break or 'miss' link-only titles
+        archive.sync_title(conn, conn.execute("SELECT * FROM titles WHERE slug=?", (a.get_json()["slug"],)).fetchone())
+        assert conn.execute("SELECT sources_status FROM titles WHERE slug=?", (a.get_json()["slug"],)).fetchone()[0] == "ok"
+
+
+def test_latest_uploads_preset_sorts_newest_and_home_has_new_releases(client):
+    import archive
+    q = archive.build_query("recent_cc", strict=True)
+    assert "year:[" in q and "licenseurl" in q and "collection:" not in q
+    assert archive.PRESET_SORT["recent_cc"] == "publicdate desc"
+    assert any(r["key"] == "latest" for r in client.get("/api/home").get_json()["rails"])

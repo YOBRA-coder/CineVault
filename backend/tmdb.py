@@ -4,6 +4,7 @@ Enable by setting TMDB_API_KEY (free at themoviedb.org). Without a key this modu
 app uses the bundled metadata + Internet Archive thumbnails.
 This product uses the TMDB API but is not endorsed or certified by TMDB.
 """
+import datetime
 import os
 import time
 
@@ -126,12 +127,63 @@ def _providers(block, region):
             "rent": pick("rent"), "buy": pick("buy"), "regions": sorted(results.keys())}
 
 
+def _youtube(block):
+    vids = [v for v in (block or {}).get("results", []) if v.get("site") == "YouTube"]
+    vids.sort(key=lambda v: (v.get("type") != "Trailer", not v.get("official"), v.get("type") != "Teaser"))
+    return vids
+
+
+SORTS = {"popular": "popularity.desc", "top": "vote_average.desc", "latest": "date.desc", "oldest": "date.asc", "revenue": "revenue.desc"}
+
+
+def browse(kind, sort="popular", year=None, genre=None, page=1):
+    """Discover lists: popular (most watched), top (most ranked), latest releases, trending, on now."""
+    tv = kind == "series"
+    mk = "tv" if tv else "movie"
+    page = max(int(page or 1), 1)
+    if sort in ("trending", "now"):
+        path = f"/trending/{mk}/week" if sort == "trending" else ("/tv/on_the_air" if tv else "/movie/now_playing")
+        d = _get(path, page=page)
+    else:
+        datef = "first_air_date" if tv else "primary_release_date"
+        by = SORTS.get(sort, SORTS["popular"]).replace("date", datef)
+        p = {"sort_by": by, "page": page, "include_adult": "false"}
+        if sort == "latest":
+            p[f"{datef}.lte"] = datetime.date.today().isoformat()
+        if sort == "top":
+            p["vote_count.gte"] = 200 if tv else 500
+        if year and str(year).isdigit():
+            p["first_air_date_year" if tv else "primary_release_year"] = int(year)
+        if genre and str(genre).isdigit():
+            p["with_genres"] = int(genre)
+        d = _get(f"/discover/{mk}", **p)
+    items = [_card({**r, "media_type": mk}) for r in d.get("results", [])]
+    return {"items": [i for i in items if i["poster"]], "page": page, "pages": min(d.get("total_pages", 1), 500)}
+
+
+def genres(kind):
+    d = _get(f"/genre/{'tv' if kind == 'series' else 'movie'}/list")
+    return [{"id": g["id"], "name": g["name"]} for g in d.get("genres", [])]
+
+
+def find_trailer(name, year, kind):
+    """YouTube key of the best trailer for a title in our own library (matched by name + year), or None."""
+    mk = "tv" if kind == "series" else "movie"
+    yp = "first_air_date_year" if mk == "tv" else "year"
+    found = (_get(f"/search/{mk}", query=name.split(" (")[0], **({yp: year} if year else {})).get("results") or [])
+    if not found and year:
+        found = (_get(f"/search/{mk}", query=name.split(" (")[0]).get("results") or [])
+    if not found:
+        return None
+    vids = _youtube(_get(f"/{mk}/{found[0]['id']}/videos"))
+    return vids[0]["key"] if vids else None
+
+
 def details(kind, tmdb_id, region="US"):
     path = f"/{'movie' if kind == 'movie' else 'tv'}/{int(tmdb_id)}"
     d = _get(path, append_to_response="credits,videos,watch/providers")
     card = _card({**d, "media_type": "movie" if kind == "movie" else "tv"})
-    vids = [v for v in (d.get("videos") or {}).get("results", []) if v.get("site") == "YouTube"]
-    vids.sort(key=lambda v: (v.get("type") != "Trailer", not v.get("official"), v.get("type") != "Teaser"))
+    vids = _youtube(d.get("videos"))
     crew = (d.get("credits") or {}).get("crew") or []
     people = [c["name"] for c in crew if c.get("job") == "Director"] if kind == "movie" else [c["name"] for c in d.get("created_by", [])]
     card.update(

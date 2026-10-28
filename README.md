@@ -56,6 +56,19 @@ shows where they stream, rent or sell instead. If a title also exists free in yo
 Bundled archive.org identifiers are best guesses that *Sync* verifies and repairs, and bundled ratings are approximate until TMDB enrichment runs.
 Existing databases are upgraded automatically: new bundled titles are added without touching or resurrecting anything you deleted.
 
+## Latest titles, sorting and legal links
+
+* **Discover** (needs `TMDB_API_KEY`): *Movies / Series*, then **Trending**, **Latest releases**, **Most watched**, **Top ranked**, **In cinemas / On air now**,
+  with *Year* (this year, last year, any year back to 2000, or all time) and *Genre* filters and a *Load more* button. These lists come live from TMDB, so they
+  update by themselves. Hover a card for a **Trailer** preview; open a title for cast, trailer and **where to watch** in your country.
+* **Trailers for the library too**: with a TMDB key every library title gets a *Trailer* button.
+* **Newest releases** rail on the home page and *Release date: newest* in Browse sort.
+* **Fresh library content**: Admin → *Fetch latest uploads now* imports the newest Creative Commons films from archive.org. Set `AUTO_UPDATE_HOURS=24` to do it automatically.
+* **Add a legal place to watch**: Admin → edit a title → *Legal places to watch* (YouTube Movies, Tubi, Pluto TV, a broadcaster…). Visitors get a button for each;
+  YouTube links can also play inside the app. On a Discover title, admins see **Add to library**, which creates a link-only title (details, cast, trailer + your legal links, no files).
+  Only link to sources that are entitled to show the title.
+* Downloads exist only for public-domain / CC titles hosted on archive.org or the Blender servers. TMDB provides information and trailers, never the film itself.
+
 ## Admin panel
 Open **/admin** (link in the footer). From there you can import films from archive.org (with a live log), re-check files,
 enrich from TMDB, **add a title by pasting an archive.org link** (a series becomes one episode per video file),
@@ -102,7 +115,7 @@ Rebuild the front end after editing `src/`: `cd frontend && npm install && npm r
 ```bash
 cd backend && python tests/run.py      # or: pytest tests
 ```
-40 API tests run against a strict fake archive server (search, filters, sync, range streaming, downloads, history, ratings, import, admin).
+45 API tests run against a strict fake archive server (search, filters, sync, range streaming, downloads, history, ratings, import, admin).
 
 ## Good to know
 * **Client identity**: each browser gets an anonymous id (stored in `localStorage`) – history, list and ratings follow it.

@@ -117,7 +117,8 @@ main { min-height: 100vh; }
 .card { display: block; position: relative; min-width: 0; }
 .card-art { position: relative; aspect-ratio: 2/3; background-image: linear-gradient(100deg, transparent 30%, #ffffff0a 50%, transparent 70%); background-size: 250% 100%; animation: shimmer 1.6s linear infinite; border-radius: var(--radius); overflow: hidden; background-color: var(--surface); box-shadow: 0 0 0 1px #ffffff12; transition: transform .3s cubic-bezier(.2, .8, .2, 1), box-shadow .3s; }
 .card:hover .card-art, .card:focus-visible .card-art { transform: translateY(-5px) scale(1.02); box-shadow: 0 0 0 1px #e8b04b99, 0 20px 40px #000b; }
-.card-art img, .poster-fallback { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; object-position: center top; display: block; }
+.card-art img, .poster-fallback { width: 100%; height: 100%; object-fit: cover; object-position: center top; display: block; }
+.card-art img, .card-art .poster-fallback { position: absolute; inset: 0; }
 .poster-fallback { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; padding: 14px; text-align: center; color: hsl(var(--h) 60% 80%);
   background: linear-gradient(160deg, hsl(var(--h) 45% 22%), hsl(calc(var(--h) + 40) 50% 10%)); font-family: var(--serif); font-size: 15px; line-height: 1.2; }
 .badge { position: absolute; left: 8px; top: 8px; padding: 2px 9px; border-radius: 999px; background: var(--gold); color: #1a1205; font-size: 10.5px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
@@ -375,3 +376,26 @@ main.watching { padding: 0; }
 .trailer { position: relative; aspect-ratio: 16/9; background: #000; } .trailer iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; }
 @media (max-width: 640px) { .prov-label { width: 100%; } }
 .watch > .btn { justify-self: start; }
+
+/* ---------- discover filters, trailer button, rails, legal links ---------- */
+.discover-filters { display: flex; flex-wrap: wrap; align-items: center; gap: 14px 18px; margin-bottom: 22px; }
+.seg { display: inline-flex; padding: 4px; background: var(--surface); border: 1px solid var(--line); border-radius: 999px; }
+.seg button { border: 0; background: none; color: var(--muted); font-weight: 600; padding: 8px 18px; border-radius: 999px; cursor: pointer; }
+.seg button.on { background: var(--gold); color: #1a1200; }
+.chips-row { display: flex; gap: 8px; flex-wrap: wrap; }
+.chips-row .chip { cursor: pointer; border: 1px solid var(--line); background: var(--surface); color: var(--text); font: inherit; font-size: 13.5px; }
+.chips-row .chip.on { background: var(--gold); border-color: var(--gold); color: #1a1200; font-weight: 700; }
+.discover-filters select:disabled { opacity: .45; }
+.trailer-btn { position: absolute; left: 8px; bottom: 8px; z-index: 3; display: inline-flex; align-items: center; gap: 6px; border: 0; border-radius: 999px; padding: 6px 12px; background: #000c; color: #fff; font-size: 12.5px; font-weight: 700; cursor: pointer; opacity: 0; transform: translateY(6px); transition: .2s; backdrop-filter: blur(6px); }
+.card:hover .trailer-btn, .trailer-btn:focus-visible { opacity: 1; transform: none; }
+@media (hover: none) { .trailer-btn { opacity: 1; transform: none; } }
+.rail-track { cursor: grab; } .rail-track.dragging { cursor: grabbing; scroll-snap-type: none; user-select: none; } .rail-track.dragging .card { pointer-events: none; }
+.rail-arrow { opacity: .85; } @media (hover: hover) { .rail-arrow { opacity: 0; } .rail-wrap:hover .rail-arrow { opacity: 1; } }
+.see-all-tile { flex: 0 0 clamp(120px, 12vw, 160px); aspect-ratio: 2/3; display: grid; place-items: center; border: 1px dashed #ffffff30; border-radius: var(--radius); color: var(--muted); font-weight: 700; text-align: center; scroll-snap-align: start; }
+.see-all-tile span { display: grid; justify-items: center; gap: 8px; } .see-all-tile:hover { color: var(--gold); border-color: var(--gold); }
+.legal-links { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin: 16px 0 4px; }
+.legal-links > span:first-child { color: var(--muted); font-size: 13px; font-weight: 700; text-transform: uppercase; letter-spacing: .08em; }
+.legal-link { display: inline-flex; align-items: center; gap: 4px; }
+.links-admin { display: grid; gap: 8px; padding-top: 6px; border-top: 1px solid var(--line); }
+.link-row { display: flex; align-items: center; gap: 10px; font-size: 13px; } .link-row span { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; min-width: 0; }
+.muted.small { font-size: 13px; align-self: center; }

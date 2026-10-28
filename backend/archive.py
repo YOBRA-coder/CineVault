@@ -212,6 +212,9 @@ def sync_title(conn, title):
     """
     tid = title["id"]
     ident = title["ia_identifier"]
+    if not ident and not title["source_url"] and not title["ia_collection"] and (title["license"] or "").startswith("External"):
+        _stamp(conn, tid, "ok")                       # link-only title: nothing to fetch from archive.org
+        return "ok"
     try:
         if title["source_url"]:                       # direct-download folder (e.g. Blender open movies)
             status = direct.sync_title(conn, title)
@@ -360,11 +363,14 @@ PRESETS = {
     "animation": ("Animation & cartoons", "animationandcartoons"),
     "opensource_movies": ("Community films (Creative Commons)", "opensource_movies"),
     "prelinger": ("Prelinger vintage films", "prelinger"),
+    "recent_cc": ("Latest uploads (CC licensed, newest first)", None),
     "classic_tv_series": ("Classic TV (as series)", "classic_tv"),
     "cartoon_series": ("Cartoons (as series)", "animationandcartoons"),
     "sci_fi_tv_series": ("Sci-fi serials (as series)", "SciFi_Horror"),
 }
 SERIES_PRESETS = {"classic_tv_series", "cartoon_series", "sci_fi_tv_series"}
+RECENT_YEARS = "year:[2012 TO 2035]"
+PRESET_SORT = {"recent_cc": "publicdate desc"}      # everything else: most downloaded first
 LICENSE_CLAUSE = "(licenseurl:(http*creativecommons.org/publicdomain*) OR licenseurl:(http*creativecommons.org/licenses/*))"
 IMPORT_FIELDS = ["identifier", "title", "year", "creator", "description", "subject", "downloads", "avg_rating", "num_reviews", "runtime"]
 PAGE_ROWS = 50
@@ -377,6 +383,8 @@ def build_query(preset="feature_films", strict=True, query=None):
     if query:
         return query
     coll = PRESETS.get(preset, ("", preset))[1]
+    if coll is None:                                    # "latest uploads": newest Creative Commons films, any collection
+        return f"mediatype:movies AND {RECENT_YEARS} AND {LICENSE_CLAUSE}"
     q = f"collection:{coll} AND mediatype:movies"
     return f"{q} AND {LICENSE_CLAUSE}" if strict else q
 
@@ -453,7 +461,8 @@ def import_catalog(conn, limit=100, query=None, progress=print, preset="feature_
     kind = kind or ("series" if preset in SERIES_PRESETS else "movie")
     q = build_query(preset, strict, query)
     progress(f"Searching archive.org: {q}")
-    if strict and not query and not search_items(q, rows=1, fields=["identifier"]):
+    sort = PRESET_SORT.get(preset, "downloads desc") if not query else "downloads desc"
+    if strict and not query and PRESETS.get(preset, ("", preset))[1] is not None and not search_items(q, rows=1, fields=["identifier"]):
         # most items in these collections carry no licence tag, so the strict filter matches nothing
         strict = False
         q = build_query(preset, False, query)
@@ -462,7 +471,7 @@ def import_catalog(conn, limit=100, query=None, progress=print, preset="feature_
         progress(f"Searching archive.org: {q}")
     added = skipped = seen = 0
     for page in range(1, MAX_PAGES + 1):
-        docs = search_items(q, rows=PAGE_ROWS, fields=IMPORT_FIELDS, page=page)
+        docs = search_items(q, rows=PAGE_ROWS, fields=IMPORT_FIELDS, page=page, sort=sort)
         if not docs:
             break
         seen += len(docs)
