@@ -632,7 +632,7 @@ def cli():
                 except Exception:
                     pass
             threading.Thread(target=bg, daemon=True).start()
-        port = int(os.environ.get("PORT", 5000))
+        port = int(os.environ.get("PORT", 10000))
         print(f"CineVault running on http://localhost:{port}")
         app.run(host=os.environ.get("HOST", "127.0.0.1"), port=port, threaded=True, debug=False)
         return
