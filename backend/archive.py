@@ -12,9 +12,11 @@ import requests
 
 import catalog
 import db
+import direct
 
 IA_BASE = os.environ.get("IA_BASE", "https://archive.org").rstrip("/")
-TIMEOUT = (8, 25)
+TIMEOUT = (10, 70)   # archive.org search can be slow; fail only after a long wait
+RETRY_STATUS = (429, 500, 502, 503, 504)
 HEADERS = {"User-Agent": "CineVault/1.0 (public-domain media browser)"}
 VIDEO_EXT = {"mp4", "m4v", "webm", "ogv", "mkv", "avi", "mpeg", "mpg", "mov"}
 PLAYABLE_EXT = {"mp4", "m4v", "webm", "ogv"}
@@ -24,14 +26,34 @@ RECHECK_AFTER = timedelta(days=7)  # when sources were fine
 
 
 def _get(path, **params):
-    r = requests.get(f"{IA_BASE}{path}", params=params, headers=HEADERS, timeout=TIMEOUT)
-    r.raise_for_status()
-    return r.json()
+    """GET json from archive.org, retrying timeouts / 5xx / rate limits with backoff."""
+    last = None
+    for attempt in range(3):
+        try:
+            r = requests.get(f"{IA_BASE}{path}", params=params, headers=HEADERS, timeout=TIMEOUT)
+            if r.status_code in RETRY_STATUS:
+                raise requests.HTTPError(f"HTTP {r.status_code} from archive.org", response=r)
+            r.raise_for_status()
+            return r.json()
+        except (requests.ConnectionError, requests.Timeout) as e:
+            last = e
+        except requests.HTTPError as e:
+            if e.response is None or e.response.status_code not in RETRY_STATUS:
+                raise
+            last = e
+        if attempt < 2:
+            time.sleep(1.5 * (attempt + 1))
+    raise last
 
 
 def media_url(identifier, name):
     from urllib.parse import quote
     return f"{IA_BASE}/download/{identifier}/{quote(name)}"
+
+
+def file_url(f):
+    """Download URL for a media_files row (direct sources store their own full URL)."""
+    return f["url"] if "url" in f.keys() and f["url"] else media_url(f["ia_identifier"], f["name"])
 
 
 def details_url(identifier):
@@ -52,10 +74,10 @@ def get_metadata(identifier):
     return data if data.get("files") is not None and data.get("metadata") else None
 
 
-def search_items(query, rows=10, sort="downloads desc", fields=None):
+def search_items(query, rows=10, sort="downloads desc", fields=None, page=1):
     fields = fields or ["identifier", "title", "year", "downloads"]
     # archive.org only honours the bracketed names `fl[]` / `sort[]`; plain `fl` returns docs without fields
-    data = _get("/advancedsearch.php", **{"q": query, "fl[]": fields, "sort[]": [sort], "rows": rows, "page": 1, "output": "json"})
+    data = _get("/advancedsearch.php", **{"q": query, "fl[]": fields, "sort[]": [sort], "rows": rows, "page": page, "output": "json"})
     return [d for d in data.get("response", {}).get("docs", []) if d.get("identifier")]
 
 
@@ -92,18 +114,32 @@ def _num(v):
 
 
 def _duration(v):
+    """Seconds from archive.org's many formats: 5700, '01:35:00', '1:35:00 min', '1 hr 30 min', '95 min'. None if unknown."""
     if v is None:
         return None
     if isinstance(v, (int, float)):
         return float(v)
-    s = str(v)
-    if ":" in s:
-        parts = [float(p) for p in s.split(":")]
-        out = 0
-        for p in parts:
-            out = out * 60 + p
+    s = str(v).strip().lower()
+    if re.fullmatch(r"\d+(\.\d+)?", s):
+        return float(s)
+    nums = re.findall(r"\d+(?:\.\d+)?", s)
+    if ":" in s and nums and len(nums) <= 3:
+        out = 0.0
+        for p in nums:
+            out = out * 60 + float(p)
         return out
-    return _num(s)
+    h = re.search(r"(\d+(?:\.\d+)?)\s*(?:h|hr|hrs|hour|hours)\b", s)
+    m = re.search(r"(\d+(?:\.\d+)?)\s*(?:m|min|mins|minute|minutes)\b", s)
+    if h or m:
+        return (float(h.group(1)) * 3600 if h else 0) + (float(m.group(1)) * 60 if m else 0)
+    return None
+
+
+def runtime_minutes(raw):
+    sec = _duration(_first(raw))
+    if not sec:
+        return None
+    return int(round(sec / 60)) if sec > 600 else int(sec) if sec >= 1 else None
 
 
 def quality_label(height, fmt, name):
@@ -177,6 +213,14 @@ def sync_title(conn, title):
     tid = title["id"]
     ident = title["ia_identifier"]
     try:
+        if title["source_url"]:                       # direct-download folder (e.g. Blender open movies)
+            status = direct.sync_title(conn, title)
+            _stamp(conn, tid, status)
+            return status
+        if title["ia_collection"]:                    # series whose episodes are the items of an archive.org collection
+            status = _sync_collection(conn, title)
+            _stamp(conn, tid, status)
+            return status
         meta = get_metadata(ident)
         if meta is None:
             ident = find_identifier(title["name"], title["year"], title["kind"])
@@ -228,6 +272,25 @@ def _sync_series(conn, tid, ident, groups):
         _store_files(conn, tid, ep["id"], ident, files)
 
 
+def _sync_collection(conn, title):
+    """Each episode has its own archive.org item; fetch every item's files."""
+    eps = conn.execute("SELECT id, ia_identifier FROM episodes WHERE title_id=? ORDER BY season, number", (title["id"],)).fetchall()
+    conn.execute("DELETE FROM media_files WHERE title_id=?", (title["id"],))
+    got = 0
+    for ep in eps:
+        try:
+            meta = get_metadata(ep["ia_identifier"])
+        except requests.RequestException:
+            continue
+        groups = video_groups(meta) if meta else {}
+        if not groups:
+            continue
+        main = max(groups, key=lambda s: max((f["duration"] or 0, f["size"]) for f in groups[s]))
+        _store_files(conn, title["id"], ep["id"], ep["ia_identifier"], groups[main])
+        got += 1
+    return "ok" if got else ("error" if eps else "missing")
+
+
 def needs_check(title):
     status, checked = title["sources_status"], title["sources_checked_at"]
     if status == "pending" or not checked:
@@ -241,7 +304,7 @@ def needs_check(title):
 def ensure_sources(conn, title_id):
     """Lazy per-title sync used when a client opens a title page."""
     title = conn.execute("SELECT * FROM titles WHERE id=?", (title_id,)).fetchone()
-    if title and title["ia_identifier"] is not None and needs_check(title):
+    if title and (title["ia_identifier"] is not None or title["source_url"]) and needs_check(title):
         sync_title(conn, title)
         conn.commit()
 
@@ -287,10 +350,31 @@ GENRE_KEYWORDS = {
     "Action": ["action"],
 }
 
-IMPORT_QUERY = (
-    "collection:feature_films AND mediatype:movies AND "
-    "(licenseurl:(http*creativecommons.org/publicdomain*) OR licenseurl:(http*creativecommons.org/licenses/*))"
-)
+# curated archive.org collections (the key is what the admin UI / CLI call a preset)
+PRESETS = {
+    "feature_films": ("Feature films", "feature_films"),
+    "classic_tv": ("Classic TV", "classic_tv"),
+    "silent_films": ("Silent films", "silent_films"),
+    "film_noir": ("Film noir", "film_noir"),
+    "scifi_horror": ("Sci-fi & horror", "SciFi_Horror"),
+    "animation": ("Animation & cartoons", "animationandcartoons"),
+    "opensource_movies": ("Community films (Creative Commons)", "opensource_movies"),
+    "prelinger": ("Prelinger vintage films", "prelinger"),
+}
+LICENSE_CLAUSE = "(licenseurl:(http*creativecommons.org/publicdomain*) OR licenseurl:(http*creativecommons.org/licenses/*))"
+IMPORT_FIELDS = ["identifier", "title", "year", "creator", "description", "subject", "downloads", "avg_rating", "num_reviews", "runtime"]
+PAGE_ROWS = 50
+MAX_PAGES = 40  # scan at most 2000 results per import run
+
+
+def build_query(preset="feature_films", strict=True, query=None):
+    """Search string for an import. `query` (custom) wins; `strict` keeps only items archive.org marks as
+    public domain / Creative Commons (small but safest); off = whole collection."""
+    if query:
+        return query
+    coll = PRESETS.get(preset, ("", preset))[1]
+    q = f"collection:{coll} AND mediatype:movies"
+    return f"{q} AND {LICENSE_CLAUSE}" if strict else q
 
 
 def _first(v):
@@ -306,53 +390,80 @@ def map_genres(subjects):
 
 
 def _clean_html(s):
-    s = re.sub(r"<[^>]+>", " ", s or "")
+    s = re.sub(r"<[^>]+>", " ", str(s or ""))
     return re.sub(r"\s+", " ", s).strip()
 
 
-def import_catalog(conn, limit=100, query=None, progress=print):
-    """Pull the most-downloaded licence-marked films from archive.org into the catalog."""
-    fields = ["identifier", "title", "year", "creator", "description", "subject", "downloads", "avg_rating", "num_reviews", "runtime"]
-    docs = search_items(query or IMPORT_QUERY, rows=min(limit, 500), fields=fields)
-    added = 0
-    for d in docs:
-        ident = d.get("identifier")
-        if not ident or conn.execute("SELECT 1 FROM titles WHERE ia_identifier=?", (ident,)).fetchone():
-            continue
-        name = _clean_html(_first(d.get("title"))) or ident
-        try:
-            year = int(str(_first(d.get("year")) or "")[:4])
-        except ValueError:
-            year = None
-        base_slug = catalog.slugify(f"{name}-{year}" if year else name)
-        rating5 = _num(_first(d.get("avg_rating")))
-        reviews = int(_num(_first(d.get("num_reviews"))) or 0)
-        rating = round(rating5 * 2, 1) if rating5 else 0
-        votes = reviews
-        runtime = None
-        rt = _first(d.get("runtime"))
-        if rt:
-            sec = _duration(rt)
-            runtime = int(round(sec / 60)) if sec and sec > 600 else (int(sec) if sec else None)
-        cur = conn.execute(
-            """INSERT INTO titles(slug, kind, name, year, description, rating, votes, runtime, director,
-                 poster_url, backdrop_url, ia_identifier, popularity, license)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-            (catalog.unique_slug(conn, base_slug), "movie", name, year,
-             _clean_html(_first(d.get("description")))[:900] or "No description available.",
-             rating, votes, runtime, _first(d.get("creator")),
-             catalog.ia_thumb(ident, IA_BASE), catalog.ia_thumb(ident, IA_BASE), ident,
-             catalog.popularity(rating or 5, int(_num(_first(d.get("downloads"))) or 0) / 50), "Public Domain / CC"),
-        )
-        tid = cur.lastrowid
-        catalog.set_genres(conn, tid, map_genres(d.get("subject")))
-        creators = _first(d.get("creator"))
-        if creators:
-            catalog.set_credit(conn, tid, creators, "director")
-        db.rebuild_fts(conn, tid)
-        added += 1
-        progress(f"  + {name} ({year or '?'})")
-    conn.commit()
+def _import_doc(conn, d):
+    """Insert one search result as a movie. Returns the name added, or None if it was a duplicate."""
+    ident = d.get("identifier")
+    if not ident or conn.execute("SELECT 1 FROM titles WHERE ia_identifier=?", (ident,)).fetchone():
+        return None
+    name = _clean_html(_first(d.get("title"))) or ident
+    try:
+        year = int(str(_first(d.get("year")) or "")[:4])
+    except ValueError:
+        year = None
+    rating5 = _num(_first(d.get("avg_rating")))
+    rating = round(rating5 * 2, 1) if rating5 else 0
+    votes = int(_num(_first(d.get("num_reviews"))) or 0)
+    downloads = int(_num(_first(d.get("downloads"))) or 0)
+    creator = _clean_html(_first(d.get("creator"))) or None
+    cur = conn.execute(
+        """INSERT INTO titles(slug, kind, name, year, description, rating, votes, runtime, director,
+             poster_url, backdrop_url, ia_identifier, popularity, license)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+        (catalog.unique_slug(conn, catalog.slugify(f"{name}-{year}" if year else name)), "movie", name, year,
+         _clean_html(_first(d.get("description")))[:900] or "No description available.",
+         rating, votes, runtime_minutes(d.get("runtime")), creator,
+         catalog.ia_thumb(ident, IA_BASE), catalog.ia_thumb(ident, IA_BASE), ident,
+         catalog.popularity(rating or 5, downloads / 50), "Public Domain / CC"))
+    tid = cur.lastrowid
+    catalog.set_genres(conn, tid, map_genres(d.get("subject")))
+    if creator:
+        catalog.set_credit(conn, tid, creator[:120], "director")
+    db.rebuild_fts(conn, tid)
+    return f"{name} ({year or '?'})"
+
+
+def import_catalog(conn, limit=100, query=None, progress=print, preset="feature_films", strict=True):
+    """Add up to `limit` NEW films. Pages through the results (skipping ones already in the catalog), so
+    running it again keeps adding more instead of re-reading the same top results. One bad record is
+    logged and skipped - it never aborts the run."""
+    q = build_query(preset, strict, query)
+    progress(f"Searching archive.org: {q}")
+    added = skipped = seen = 0
+    for page in range(1, MAX_PAGES + 1):
+        docs = search_items(q, rows=PAGE_ROWS, fields=IMPORT_FIELDS, page=page)
+        if not docs:
+            break
+        seen += len(docs)
+        for d in docs:
+            if added >= limit:
+                break
+            conn.execute("SAVEPOINT imp")
+            try:
+                name = _import_doc(conn, d)
+                conn.execute("RELEASE imp")
+            except Exception as e:  # noqa: BLE001 - keep going, report it
+                conn.execute("ROLLBACK TO imp")
+                conn.execute("RELEASE imp")
+                skipped += 1
+                progress(f"  ! skipped {d.get('identifier')}: {type(e).__name__}: {e}")
+                continue
+            if name:
+                added += 1
+                progress(f"  + {name}")
+        conn.commit()
+        if added >= limit or len(docs) < PAGE_ROWS:
+            break
+    if seen == 0:
+        progress("archive.org returned no results for that search." + (
+            " Try turning off 'only items marked public domain / CC' or pick another collection." if strict else ""))
+    elif added == 0:
+        progress(f"Scanned {seen} results - all were already in your catalog. Try another collection or turn off the licence filter.")
+    if skipped:
+        progress(f"{skipped} records were skipped because of bad data.")
     return added
 
 
@@ -376,8 +487,16 @@ def add_from_identifier(conn, ref, kind="movie", progress=print):
     if not meta:
         raise ValueError("archive.org has no item with that identifier")
     md = meta["metadata"]
-    groups = video_groups(meta)
-    if not groups:
+    is_collection = _first(md.get("mediatype")) == "collection"
+    groups = {} if is_collection else video_groups(meta)
+    collection_items = []
+    if is_collection:
+        kind = "series"
+        collection_items = search_items(f"collection:{ident} AND mediatype:movies", rows=300, sort="titleSorter asc",
+                                         fields=["identifier", "title"])
+        if not collection_items:
+            raise ValueError("That collection has no videos")
+    elif not groups:
         raise ValueError("The item has no video files")
     name = _clean_html(_first(md.get("title"))) or ident
     try:
@@ -392,10 +511,16 @@ def add_from_identifier(conn, ref, kind="movie", progress=print):
         (catalog.unique_slug(conn, catalog.slugify(f"{name}-{year}" if year else name)), kind, name, year, desc, 0, 0, None,
          _first(md.get("creator")), catalog.ia_thumb(ident, IA_BASE), catalog.ia_thumb(ident, IA_BASE), ident, 5, "Public Domain / CC"))
     tid = cur.lastrowid
+    if is_collection:
+        conn.execute("UPDATE titles SET ia_collection=? WHERE id=?", (ident, tid))
     catalog.set_genres(conn, tid, map_genres(md.get("subject")))
     if _first(md.get("creator")):
         catalog.set_credit(conn, tid, _first(md.get("creator")), "director")
-    if kind == "series":
+    if is_collection:
+        for n, item in enumerate(sorted(collection_items, key=lambda d: _natkey(_first(d.get("title")) or d["identifier"])), start=1):
+            conn.execute("INSERT INTO episodes(title_id, season, number, name, ia_identifier) VALUES (?,?,?,?,?)",
+                         (tid, 1, n, _clean_html(_first(item.get("title"))) or item["identifier"], item["identifier"]))
+    elif kind == "series":
         for n, stem in enumerate(groups, start=1):
             conn.execute("INSERT INTO episodes(title_id, season, number, name) VALUES (?,?,?,?)",
                          (tid, 1, n, re.sub(r"[_]+", " ", stem).strip()))

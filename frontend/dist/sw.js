@@ -1,5 +1,5 @@
 /* CineVault service worker. The build id below is stamped at build time so each release gets fresh caches. */
-const BUILD = 'mvrnf5ci';
+const BUILD = 'mvry42n6';
 const SHELL = `cv-shell-${BUILD}`;
 const API = `cv-api-${BUILD}`;
 const IMG = 'cv-img-v1';       // posters survive releases

@@ -6,6 +6,8 @@ import Detail from './pages/Detail.jsx';
 import Player from './pages/Player.jsx';
 import { Downloads, History, MyList } from './pages/Library.jsx';
 import Admin from './pages/Admin.jsx';
+import Discover from './pages/Discover.jsx';
+import DiscoverDetail from './pages/DiscoverDetail.jsx';
 import { Link, useLocation } from './router.jsx';
 import { OfflineBar, UpdateBar } from './components/PwaBars.jsx';
 
@@ -25,6 +27,8 @@ export default function App() {
   else if (seg[0] === 'history') page = <History />;
   else if (seg[0] === 'downloads') page = <Downloads />;
   else if (seg[0] === 'admin') page = <Admin />;
+  else if (seg[0] === 'discover' && seg[1] && seg[2]) page = <DiscoverDetail key={`${seg[1]}-${seg[2]}`} kind={seg[1]} id={seg[2]} />;
+  else if (seg[0] === 'discover') page = <Discover />;
   else page = <NotFound />;
   const watching = seg[0] === 'watch';
   return (

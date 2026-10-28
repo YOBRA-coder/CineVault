@@ -25,6 +25,7 @@ CREATE TABLE IF NOT EXISTS titles (
     backdrop_url TEXT,
     ia_identifier TEXT,
     ia_collection TEXT,
+    source_url TEXT,                          -- direct-download folder (non-archive.org sources)
     license TEXT DEFAULT 'Public Domain',
     sources_status TEXT DEFAULT 'pending',   -- pending | ok | missing | error
     sources_checked_at TEXT,
@@ -70,6 +71,7 @@ CREATE TABLE IF NOT EXISTS media_files (
     title_id INTEGER NOT NULL REFERENCES titles(id) ON DELETE CASCADE,
     episode_id INTEGER REFERENCES episodes(id) ON DELETE CASCADE,
     ia_identifier TEXT NOT NULL,
+    url TEXT,                                 -- full URL for direct sources; NULL = archive.org item file
     name TEXT NOT NULL,
     format TEXT,
     size INTEGER,
@@ -123,6 +125,8 @@ CREATE TABLE IF NOT EXISTS downloads (
 );
 CREATE INDEX IF NOT EXISTS idx_downloads_client ON downloads(client_id, created_at DESC);
 
+CREATE TABLE IF NOT EXISTS deleted_slugs (slug TEXT PRIMARY KEY);   -- admin-deleted seed titles stay deleted
+
 CREATE TABLE IF NOT EXISTS searches (
     id INTEGER PRIMARY KEY,
     client_id TEXT NOT NULL,
@@ -160,9 +164,19 @@ def session(path=None):
         conn.close()
 
 
+MIGRATIONS = [  # (table, column, DDL) - upgrade databases created by earlier versions
+    ("titles", "source_url", "ALTER TABLE titles ADD COLUMN source_url TEXT"),
+    ("media_files", "url", "ALTER TABLE media_files ADD COLUMN url TEXT"),
+]
+
+
 def init_db(path=None):
     with session(path) as conn:
         conn.executescript(SCHEMA)
+        for table, column, ddl in MIGRATIONS:
+            cols = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
+            if column not in cols:
+                conn.execute(ddl)
 
 
 def rebuild_fts(conn, title_id=None):

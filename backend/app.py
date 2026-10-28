@@ -2,7 +2,7 @@
 
 Run:      python app.py                 (serves API + built React app on http://localhost:5000)
 Sync:     python app.py sync            (verify archive.org items, fetch playable files)
-Import:   python app.py import 200      (add up to 200 more public-domain films from archive.org)
+Import:   python app.py import 200 [preset] [--all]   (add 200 NEW films; presets: feature_films classic_tv silent_films film_noir scifi_horror animation opensource_movies prelinger; --all = don't require a PD/CC licence label)
 Add one:  python app.py add <archive.org link or id> [movie|series]
 Admin UI: http://localhost:5000/admin   (set ADMIN_TOKEN to use it on a server)
 Enrich:   python app.py tmdb            (optional posters/cast from TMDB when TMDB_API_KEY is set)
@@ -99,6 +99,7 @@ def create_app():
     @app.errorhandler(400)
     @app.errorhandler(403)
     @app.errorhandler(404)
+    @app.errorhandler(502)
     def json_error(e):
         if request.path.startswith("/api/"):
             return jsonify(error=getattr(e, "description", str(e))), e.code
@@ -280,6 +281,42 @@ def create_app():
         out["continue"] = continue_watching() if g.cid else []
         return jsonify(out)
 
+    # ------------------------------------------------------------ discover (TMDB: any title, trailer, where to watch)
+    def in_library(name, year):
+        row = g.db.execute("SELECT slug FROM titles WHERE lower(name)=lower(?) AND (year=? OR ? IS NULL) LIMIT 1", (name, year, year)).fetchone()
+        return row["slug"] if row else None
+
+    def tmdb_call(fn, *a):
+        if not tmdb.enabled():
+            return None
+        try:
+            return fn(*a)
+        except requests.HTTPError as e:
+            code = e.response.status_code if e.response is not None else 0
+            abort(404 if code == 404 else 502, "TMDB rejected the request - check TMDB_API_KEY" if code == 401 else "TMDB lookup failed")
+        except requests.RequestException:
+            abort(502, "Couldn't reach TMDB right now")
+
+    @app.get("/api/discover")
+    def discover():
+        q = (request.args.get("q") or "").strip()
+        if not tmdb.enabled():
+            return jsonify(enabled=False, items=[], pages=0)
+        data = tmdb_call(tmdb.search_any, q, request.args.get("page", 1, type=int)) if q else tmdb_call(tmdb.trending)
+        for i in data["items"]:
+            i["library_slug"] = in_library(i["name"], i["year"])
+        return jsonify(enabled=True, q=q, trending=not q, **data)
+
+    @app.get("/api/discover/<kind>/<int:tmdb_id>")
+    def discover_detail(kind, tmdb_id):
+        if kind not in ("movie", "series"):
+            abort(404, "Unknown type")
+        if not tmdb.enabled():
+            abort(404, "TMDB is not configured")
+        d = tmdb_call(tmdb.details, kind, tmdb_id, (request.args.get("region") or "US")[:2])
+        d["library_slug"] = in_library(d["name"], d["year"])
+        return jsonify(d)
+
     # ------------------------------------------------------------ title detail
     def find_title(ref):
         row = g.db.execute("SELECT * FROM titles WHERE id=?", (int(ref),)).fetchone() if str(ref).isdigit() else \
@@ -329,6 +366,7 @@ def create_app():
             cast=cast, directors=directors, files=files, episodes=episodes, mine=mine, language=t["language"],
             country=t["country"], sources_status=t["sources_status"],
             archive_url=archive.details_url(t["ia_identifier"]) if t["ia_identifier"] else None,
+            source_url=t["source_url"],
             archive_error=archive_error,
             seasons=sorted({e["season"] for e in episodes}),
             preview_start=int(min(max((t["runtime"] or 20) * 60 * 0.12, 20), 300)),
@@ -390,7 +428,7 @@ def create_app():
         return re.sub(r'[\\/:*?"<>|]+', "", f"{base} [{f['quality']}].{ext}")
 
     def upstream(f, attachment):
-        url = archive.media_url(f["ia_identifier"], f["name"])
+        url = archive.file_url(f)
         if not (PROXY_DOWNLOAD if attachment else PROXY_STREAM):
             return redirect(url, 302)
         headers = dict(archive.HEADERS)
@@ -458,7 +496,7 @@ def create_app():
     @app.get("/api/titles/<ref>/links.txt")
     def links_txt(ref):
         t = find_title(ref)
-        lines = [archive.media_url(f["ia_identifier"], f["name"]) for f in episode_links(t, request.args.get("season", type=int))]
+        lines = [archive.file_url(f) for f in episode_links(t, request.args.get("season", type=int))]
         return Response("\n".join(lines) + "\n", mimetype="text/plain",
                         headers={"Content-Disposition": f'attachment; filename="{re.sub(r"[^A-Za-z0-9]+", "_", t["name"])}_links.txt"'})
 
@@ -468,7 +506,7 @@ def create_app():
         lines = ["#EXTM3U"]
         for f in episode_links(t, request.args.get("season", type=int)):
             label = pretty_filename(f).rsplit(".", 1)[0]
-            lines += [f"#EXTINF:{int(f['duration'] or -1)},{label}", archive.media_url(f["ia_identifier"], f["name"])]
+            lines += [f"#EXTINF:{int(f['duration'] or -1)},{label}", archive.file_url(f)]
         return Response("\n".join(lines) + "\n", mimetype="audio/x-mpegurl",
                         headers={"Content-Disposition": f'attachment; filename="{re.sub(r"[^A-Za-z0-9]+", "_", t["name"])}.m3u"'})
 
@@ -613,6 +651,11 @@ def create_app():
         return {"running": jobs["name"], "started": jobs["started"], "finished": jobs["finished"],
                 "result": jobs["result"], "error": jobs["error"], "log": list(jobs["log"])}
 
+    @app.get("/api/admin/presets")
+    def admin_presets():
+        need_admin()
+        return jsonify([{"key": k, "label": v[0]} for k, v in archive.PRESETS.items()])
+
     @app.get("/api/admin/status")
     def admin_status():
         need_admin()
@@ -639,9 +682,11 @@ def create_app():
         body = request.get_json(silent=True) or {}
         n = max(1, min(int(body.get("limit") or request.args.get("limit", 100)), 500))
         query = (body.get("query") or "").strip() or None
+        preset = body.get("preset") if body.get("preset") in archive.PRESETS else "feature_films"
+        strict = body.get("strict", True) is not False
 
         def job(conn, log):
-            added = archive.import_catalog(conn, n, query=query, progress=log)
+            added = archive.import_catalog(conn, n, query=query, progress=log, preset=preset, strict=strict)
             log(f"Imported {added} new titles. Checking files on archive.org…")
             res = archive.sync_all(conn, progress=log, only_stale=True)
             return {"imported": added, "sync": res}
@@ -732,7 +777,8 @@ def create_app():
     @app.delete("/api/admin/titles/<int:tid>")
     def admin_delete_title(tid):
         need_admin()
-        find_title(tid)
+        t = find_title(tid)
+        g.db.execute("INSERT OR IGNORE INTO deleted_slugs(slug) VALUES (?)", (t["slug"],))   # seeded titles stay deleted after restarts
         g.db.execute("DELETE FROM title_fts WHERE rowid=?", (tid,))
         g.db.execute("DELETE FROM titles WHERE id=?", (tid,))
         return jsonify(ok=True)
@@ -794,9 +840,9 @@ def cli():
     if cmd == "run":
         app = create_app()
         start_background()
-        port = int(os.environ.get("PORT", 10000))
+        port = int(os.environ.get("PORT", 5000))
         print(f"CineVault running on http://localhost:{port}   (admin panel: /admin)")
-        app.run(host=os.environ.get("HOST", "0.0.0.0"), port=port, threaded=True, debug=False)
+        app.run(host=os.environ.get("HOST", "127.0.0.1"), port=port, threaded=True, debug=False)
         return
     db.init_db()
     with db.session() as conn:
@@ -805,8 +851,10 @@ def cli():
             if cmd == "sync":
                 print(archive.sync_all(conn))
             elif cmd == "import":
-                n = int(sys.argv[2]) if len(sys.argv) > 2 else 100
-                print(f"Imported {archive.import_catalog(conn, n)} titles")
+                n = int(sys.argv[2]) if len(sys.argv) > 2 and sys.argv[2].isdigit() else 100
+                preset = next((a for a in sys.argv[2:] if a in archive.PRESETS), "feature_films")
+                strict = "--all" not in sys.argv
+                print(f"Imported {archive.import_catalog(conn, n, preset=preset, strict=strict)} titles")
                 print(archive.sync_all(conn, only_stale=True))
             elif cmd == "add":
                 kind = sys.argv[3] if len(sys.argv) > 3 else "movie"

@@ -86,6 +86,10 @@ function Stats({ ov }) {
 
 function Actions({ ov, reload }) {
   const [limit, setLimit] = useState(100);
+  const [preset, setPreset] = useState('feature_films');
+  const [presets, setPresets] = useState([]);
+  const [strict, setStrict] = useState(true);
+  useEffect(() => { adm('GET', '/presets').then(setPresets).catch(() => {}); }, []);
   const [query, setQuery] = useState('');
   const [stale, setStale] = useState(true);
   const [ident, setIdent] = useState('');
@@ -103,11 +107,16 @@ function Actions({ ov, reload }) {
     <div className="panel">
       <h3>Import & sync</h3>
       <div className="act">
-        <div><strong>Import films</strong><small>Adds the most-downloaded licence-marked films from archive.org, then fetches their files.</small></div>
+        <div><strong>Import films</strong><small>Adds <em>new</em> titles each run (it skips ones you already have), most-downloaded first, then fetches their files.</small></div>
         <div className="act-controls">
+          <select value={preset} onChange={(e) => setPreset(e.target.value)} aria-label="Collection">
+            {presets.map((p) => <option key={p.key} value={p.key}>{p.label}</option>)}
+          </select>
           <input type="number" min="1" max="500" value={limit} onChange={(e) => setLimit(e.target.value)} aria-label="How many" />
-          <button className="btn primary sm" disabled={running} onClick={() => start('/import', { limit: Number(limit), query }, 'Import started')}><Icon name="download" size={16} />Import</button>
+          <button className="btn primary sm" disabled={running} onClick={() => start('/import', { limit: Number(limit), query, preset, strict }, 'Import started')}><Icon name="download" size={16} />Import</button>
         </div>
+        <label className="check"><input type="checkbox" checked={strict} onChange={(e) => setStrict(e.target.checked)} />Only items archive.org marks as public domain / Creative Commons</label>
+        {!strict && <small>Includes the whole collection. These are almost always old public-domain classics hosted by archive.org, but rights aren’t guaranteed for every single upload — review what you publish.</small>}
         <details><summary>Custom archive.org search (optional)</summary>
           <input className="full" value={query} onChange={(e) => setQuery(e.target.value)} placeholder='e.g. collection:feature_films AND mediatype:movies AND subject:"film noir"' />
         </details>
@@ -125,9 +134,9 @@ function Actions({ ov, reload }) {
           <button className="btn ghost sm" onClick={async () => { await adm('POST', '/reindex'); toast('Search index rebuilt'); }}>Rebuild search</button></div>
       </div>
       <form className="act" onSubmit={add}>
-        <div><strong>Add a title by link</strong><small>Paste an archive.org link or identifier. A series becomes one episode per video file.</small></div>
+        <div><strong>Add a title by link</strong><small>Paste an archive.org link or identifier. A series = one episode per video file; a collection link = a series with one episode per item.</small></div>
         <div className="act-controls wrap">
-          <input className="grow" value={ident} onChange={(e) => setIdent(e.target.value)} placeholder="https://archive.org/details/…" aria-label="archive.org link or id" required />
+          <input className="grow" value={ident} onChange={(e) => setIdent(e.target.value)} placeholder="https://archive.org/details/… (a collection link becomes a series)" aria-label="archive.org link or id" required />
           <select value={kind} onChange={(e) => setKind(e.target.value)} aria-label="Type"><option value="movie">Movie</option><option value="series">Series</option></select>
           <button className="btn primary sm" disabled={busy}>{busy ? 'Adding…' : 'Add'}</button>
         </div>

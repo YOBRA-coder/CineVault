@@ -219,3 +219,24 @@ SERIES = [
          ("The Adventurer", 1917, "An escaped convict poses as a gentleman at a seaside party."),
      ])]),
 ]
+
+
+# Direct-download films: (slug, name, year, genres, runtime_min, director, rating, votes, folder_url, licence, cast, description)
+# Files are discovered from the folder listing when the title is synced. All are Creative Commons licensed by the Blender Foundation.
+DIRECT = [
+    ("big-buck-bunny", "Big Buck Bunny", 2008, ["Animation", "Comedy", "Family", "Short"], 10, "Sacha Goedegebure", 7.2, 8000,
+     "https://download.blender.org/peach/bigbuckbunny_movies/", "CC BY 3.0 · © Blender Foundation | peach.blender.org", [],
+     "A gentle giant rabbit is pushed too far by three bullying rodents and plans an elaborate, cartoonishly cruel revenge. Blender's first open movie."),
+    ("elephants-dream", "Elephants Dream", 2006, ["Animation", "Sci-Fi", "Short"], 11, "Bassam Kurdali", 6.3, 3000,
+     "https://download.blender.org/ED/", "CC BY 2.5 · © Blender Foundation | orange.blender.org",
+     [("Cas Jansen", "Proog"), ("Tygo Gernandt", "Emo")],
+     "Two men explore a surreal machine world; one believes in it, the other sees only what it is. The first-ever open movie made entirely with open-source tools."),
+    ("sintel", "Sintel", 2010, ["Animation", "Fantasy", "Adventure", "Short"], 15, "Colin Levy", 7.5, 7000,
+     "https://download.blender.org/durian/movies/", "CC BY 3.0 · © Blender Foundation | durian.blender.org",
+     [("Halina Reijn", "Sintel"), ("Thom Hoffman", "Shaman")],
+     "A lonely young woman searches the world for the baby dragon she befriended and lost. A moving fantasy short with film-quality animation."),
+    ("tears-of-steel", "Tears of Steel", 2012, ["Sci-Fi", "Action", "Short"], 12, "Ian Hubert", 6.5, 5000,
+     "https://download.blender.org/demo/movies/ToS/", "CC BY 3.0 · © Blender Foundation | mango.blender.org",
+     [("Derek de Lint", "Thom"), ("Sebastian Koch", "Barley"), ("Vanja Rukavina", "Celia")],
+     "In a future Amsterdam, a team of warriors and scientists tries to save the world with robots and a time-warping experiment. Live action blended with CG."),
+]

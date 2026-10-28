@@ -6,7 +6,7 @@ import { InstallButton } from './PwaBars.jsx';
 
 const NAV = [
   ['/', 'Home'], ['/browse?kind=movie', 'Movies'], ['/browse?kind=series', 'Series'],
-  ['/list', 'My List'], ['/history', 'History'], ['/downloads', 'Downloads'],
+  ['/discover', 'Discover'], ['/list', 'My List'], ['/history', 'History'], ['/downloads', 'Downloads'],
 ];
 
 export default function Header() {

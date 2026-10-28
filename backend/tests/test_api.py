@@ -17,6 +17,7 @@ except ImportError:  # allow `python tests/run.py` without pytest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 VIDEO = b"0123456789" * 1000  # 10 KB fake video
+LAST_TMDB = {}                # what the fake TMDB saw last (auth style assertions)
 
 
 class FakeIA(BaseHTTPRequestHandler):
@@ -30,6 +31,9 @@ class FakeIA(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
+
+    def do_HEAD(self):
+        self.send_response(200); self.send_header("Content-Length", "5000"); self.end_headers()
 
     def do_GET(self):
         from urllib.parse import urlparse, parse_qs
@@ -52,6 +56,10 @@ class FakeIA(BaseHTTPRequestHandler):
                 return self._json({"metadata": {"identifier": ident, "title": "Brand New Item", "year": "1949", "creator": "A. Director",
                                    "description": "Added by hand.", "subject": "comedy; silent"},
                                    "files": [{"name": "item.mp4", "format": "h.264", "size": "9000", "height": "480", "length": "3000"}]})
+            if ident == "coll_series":
+                return self._json({"metadata": {"identifier": ident, "title": "Old Radio Serial", "year": "1948", "mediatype": "collection"}, "files": []})
+            if ident in ("ep_a", "ep_b"):
+                return self._json({"metadata": {"identifier": ident}, "files": [{"name": f"{ident}.mp4", "format": "h.264", "size": "700", "height": "480", "length": "900"}]})
             if ident == "series_item":
                 return self._json({"metadata": {"identifier": ident, "title": "Tiny Serial", "year": "1950"},
                                    "files": [{"name": f"ep{n}.mp4", "format": "h.264", "size": "900", "height": "360", "length": "600"} for n in (1, 2, 3)]})
@@ -69,9 +77,48 @@ class FakeIA(BaseHTTPRequestHandler):
                          "description": "<p>An imported <b>film</b>.</p>", "subject": ["Horror", "Silent"], "downloads": 12345, "avg_rating": "4.0", "num_reviews": 12},
                         {"title": "record without identifier"}]
             # like the real archive.org: only the fields requested through the bracketed `fl[]` come back
+            if "collection:bulk_films" in q:       # 120 films with awkward real-world runtimes
+                runtimes = ["1 hr 30 min", "1:35:00 min", "95 min", "5700", "01:35:00", "about an hour", None]
+                allq = [{"identifier": f"bulk_{i:03d}", "title": f"Bulk Film {i}", "year": str(1930 + i % 40), "downloads": 1000 - i,
+                         "runtime": runtimes[i % len(runtimes)], "subject": "comedy", "creator": ["Dir %d" % (i % 9)]} for i in range(120)]
+                rows, page = int(qs.get("rows", ["50"])[0]), int(qs.get("page", ["1"])[0])
+                docs = allq[(page - 1) * rows: page * rows]
+            if "collection:coll_series" in q:
+                docs = [{"identifier": "ep_b", "title": "Episode 10"}, {"identifier": "ep_a", "title": "Episode 2"}]
             wanted = qs.get("fl[]", [])
             return self._json({"response": {"docs": [{k: v for k, v in d.items() if k in wanted} for d in docs]}})
-        if u.path.startswith("/download/"):
+        if u.path.startswith("/tmdb/3/"):
+            LAST_TMDB.update(path=u.path, qs=parse_qs(u.query), auth=self.headers.get("Authorization"))
+            p = u.path[len("/tmdb/3"):]
+            if p == "/search/multi":
+                q = parse_qs(u.query).get("query", [""])[0].lower()
+                res = []
+                if "thrones" in q:
+                    res.append({"id": 1399, "media_type": "tv", "name": "Game of Thrones", "first_air_date": "2011-04-17", "poster_path": "/got.jpg", "overview": "Nine noble families fight for control.", "vote_average": 8.4, "vote_count": 25000})
+                if "metropolis" in q:
+                    res.append({"id": 19, "media_type": "movie", "title": "Metropolis", "release_date": "1927-01-10", "poster_path": "/m.jpg", "overview": "x", "vote_average": 8.2, "vote_count": 2000})
+                res.append({"id": 5, "media_type": "person", "name": "Someone"})
+                return self._json({"results": res, "total_pages": 1, "total_results": len(res)})
+            if p == "/trending/all/week":
+                return self._json({"results": [{"id": 1399, "media_type": "tv", "name": "Game of Thrones", "first_air_date": "2011-04-17", "vote_average": 8.4}]})
+            if p == "/tv/1399":
+                return self._json({"id": 1399, "name": "Game of Thrones", "first_air_date": "2011-04-17", "overview": "Nine noble families fight for control.",
+                                   "tagline": "Winter Is Coming", "poster_path": "/got.jpg", "backdrop_path": "/gotb.jpg", "vote_average": 8.4, "vote_count": 25000,
+                                   "genres": [{"name": "Drama"}, {"name": "Fantasy"}], "number_of_seasons": 8, "number_of_episodes": 73, "episode_run_time": [60], "status": "Ended",
+                                   "created_by": [{"name": "David Benioff"}, {"name": "D. B. Weiss"}],
+                                   "credits": {"cast": [{"name": "Emilia Clarke", "character": "Daenerys Targaryen", "profile_path": "/e.jpg"}], "crew": []},
+                                   "videos": {"results": [{"site": "YouTube", "type": "Clip", "key": "CLIPKEY"}, {"site": "YouTube", "type": "Trailer", "official": True, "key": "TRAILERKEY"}, {"site": "Vimeo", "type": "Trailer", "key": "NO"}]},
+                                   "watch/providers": {"results": {"US": {"link": "https://www.themoviedb.org/tv/1399/watch?locale=US",
+                                                                           "flatrate": [{"provider_name": "Max", "logo_path": "/max.png"}],
+                                                                           "rent": [{"provider_name": "Apple TV", "logo_path": "/atv.png"}], "buy": [{"provider_name": "Amazon Video", "logo_path": "/amz.png"}]},
+                                                                  "KE": {"link": "https://www.themoviedb.org/tv/1399/watch?locale=KE", "flatrate": [{"provider_name": "Showmax", "logo_path": "/sm.png"}]}}}})
+            self.send_response(404); self.end_headers(); return
+        if u.path == "/folder/":
+            links = ["big_buck_bunny_720p.mp4", "big_buck_bunny_1080p.mov", "big_buck_bunny_trailer.mp4", "movie-stereo.mp4", "notes.txt", "bundle.zip", "old.mkv"]
+            html = "<html><body><h1>Index</h1>" + "".join(f'<a href="{n}">{n}</a><br>' for n in links) + '<a href="?C=N;O=D">Name</a></body></html>'
+            body = html.encode(); self.send_response(200); self.send_header("Content-Type", "text/html"); self.send_header("Content-Length", str(len(body)))
+            self.end_headers(); self.wfile.write(body); return
+        if u.path.startswith("/download/") or (u.path.startswith("/folder/") and u.path != "/folder/"):
             data, status = VIDEO, 200
             rng = self.headers.get("Range")
             hdr = {"Content-Type": "video/mp4", "Accept-Ranges": "bytes"}
@@ -286,11 +333,12 @@ def test_search_uses_bracketed_fields_regression(client):
 
 
 def test_admin_import_job_with_log(client):
+    before = client.get("/api/admin/overview").get_json()["titles"]
     assert client.post("/api/admin/import", json={"limit": 10}).get_json()["started"]
     st = _wait_job(client)
     assert st["error"] is None and st["result"]["imported"] == 1
     assert any("Imported 1 new titles" in line for line in st["log"])
-    assert client.get("/api/admin/overview").get_json()["titles"] == 39
+    assert client.get("/api/admin/overview").get_json()["titles"] == before + 1
 
 
 def test_admin_sync_job_and_overview(client):
@@ -353,3 +401,171 @@ def test_redirect_mode_for_stream_only(client):
     r = client.get(f"/api/stream/{fid}")
     assert r.status_code == 302 and "/download/night_of_the_living_dead/" in r.headers["Location"]
     assert client.get(f"/api/download/{fid}").status_code == 200       # downloads still proxied (named + saved, not played)
+
+
+# ------------------------------------------------------------------ import hardening, direct sources, collections
+def test_runtime_parsing_handles_real_world_formats():
+    import archive
+    cases = [("1 hr 30 min", 90), ("1:35:00 min", 95), ("95 min", 95), ("5700", 95), ("01:35:00", 95), ("about an hour", None),
+             (None, None), ("88:00", 88), (5400, 90), ("2 hours", 120), ("0", None)]
+    for raw, want in cases:
+        assert archive.runtime_minutes(raw) == want, (raw, archive.runtime_minutes(raw), want)
+    assert archive.runtime_minutes(["1:30:00"]) == 90
+
+
+def test_import_pages_through_results_and_survives_bad_data(client):
+    import archive, db
+    with db.session() as conn:
+        logs = []
+        a = archive.import_catalog(conn, 60, query="collection:bulk_films AND mediatype:movies", progress=logs.append)
+        assert a == 60                                             # spans two pages of 50; odd runtimes did not crash it
+        b = archive.import_catalog(conn, 60, query="collection:bulk_films AND mediatype:movies", progress=logs.append)
+        assert b == 60                                             # second run continues where the first stopped
+        c = archive.import_catalog(conn, 60, query="collection:bulk_films AND mediatype:movies", progress=logs.append)
+        assert c == 0 and any("already in your catalog" in l for l in logs)
+        assert conn.execute("SELECT COUNT(*) FROM titles WHERE ia_identifier LIKE 'bulk_%'").fetchone()[0] == 120
+        assert conn.execute("SELECT runtime FROM titles WHERE ia_identifier='bulk_000'").fetchone()[0] == 90
+
+
+def test_build_query_presets_and_strict_toggle():
+    import archive
+    assert "collection:classic_tv" in archive.build_query("classic_tv", strict=False)
+    assert "licenseurl" not in archive.build_query("classic_tv", strict=False)
+    assert "licenseurl" in archive.build_query("classic_tv", strict=True)
+    assert archive.build_query(query="custom AND thing") == "custom AND thing"
+    assert "SciFi_Horror" in archive.build_query("scifi_horror")
+
+
+def test_admin_import_accepts_preset_and_strict(client):
+    client.post("/api/admin/import", json={"limit": 5, "preset": "film_noir", "strict": False})
+    st = _wait_job(client)
+    assert st["error"] is None and any("collection:film_noir" in l and "licenseurl" not in l for l in st["log"])
+    assert {p["key"] for p in client.get("/api/admin/presets").get_json()} >= {"feature_films", "classic_tv", "scifi_horror"}
+
+
+def test_direct_source_folder_is_discovered(client, fake_ia=None):
+    import db
+    base = client.appmod.archive.IA_BASE
+    with db.session() as conn:
+        conn.execute("UPDATE titles SET source_url=? WHERE slug='big-buck-bunny'", (base + "/folder/",))
+    d = client.get("/api/titles/big-buck-bunny").get_json()
+    assert d["sources_status"] == "ok" and d["license"].startswith("CC BY")
+    names = sorted(f["name"] for f in d["files"])
+    assert names == ["big_buck_bunny_1080p.mov", "big_buck_bunny_720p.mp4", "old.mkv"]   # trailer / stereo / zip / txt are ignored
+    best = d["files"][0]
+    assert best["playable"] and {f["quality"] for f in d["files"] if f["playable"]} == {"720p", "1080p"}
+    assert [f["playable"] for f in d["files"] if f["name"] == "old.mkv"] == [False]       # mkv: download only
+    r = client.get(f"/api/download/{best['id']}")
+    assert r.status_code == 200 and "Big%20Buck%20Bunny" in r.headers["Content-Disposition"]
+    assert client.get(f"/api/stream/{best['id']}", headers={"Range": "bytes=0-9"}).status_code == 206
+
+
+def test_direct_folder_down_is_error_not_crash(client):
+    import db
+    with db.session() as conn:
+        conn.execute("UPDATE titles SET source_url='http://127.0.0.1:1/nope/' WHERE slug='sintel'")
+    assert client.get("/api/titles/sintel").get_json()["sources_status"] == "error"
+
+
+def test_blender_titles_are_seeded(client):
+    for slug in ("big-buck-bunny", "sintel", "tears-of-steel", "elephants-dream"):
+        d = client.get(f"/api/titles/{slug}").get_json()
+        assert d["license"].startswith("CC BY") and "Short" in d["genres"]
+
+
+def test_collection_becomes_series_with_episode_files(client):
+    r = client.post("/api/admin/titles", json={"identifier": "https://archive.org/details/coll_series"}).get_json()
+    d = client.get(f"/api/titles/{r['slug']}").get_json()
+    assert d["kind"] == "series" and [e["name"] for e in d["episodes"]] == ["Episode 2", "Episode 10"]   # natural sort
+    assert all(e["files"] for e in d["episodes"]) and d["sources_status"] == "ok"
+
+
+def test_deleted_seed_title_stays_deleted_after_restart_and_new_seed_titles_arrive(client):
+    import db, catalog
+    tid = client.get("/api/titles/the-kid").get_json()["id"]
+    client.delete(f"/api/admin/titles/{tid}")
+    with db.session() as conn:
+        conn.execute("DELETE FROM titles WHERE slug='sintel'")        # simulate a DB from before Sintel was bundled
+        catalog.ensure_seeded(conn)                                    # what happens on every startup
+    assert client.get("/api/titles/the-kid").status_code == 404        # not resurrected
+    assert client.get("/api/titles/sintel").status_code == 200         # new bundled title added
+
+
+def test_old_database_is_migrated(tmp_path):
+    import sqlite3, importlib, sys, os
+    path = str(tmp_path / "old.db")
+    os.environ["CINEVAULT_DB"] = path
+    sys.modules.pop("db", None)
+    import db
+    # an "old" database = today's schema minus the two columns added in this release
+    old_schema = "\n".join(l for l in db.SCHEMA.splitlines() if "source_url TEXT" not in l and "    url TEXT," not in l and "deleted_slugs" not in l)
+    c = sqlite3.connect(path)
+    c.executescript(old_schema)
+    c.execute("INSERT INTO titles(slug, kind, name) VALUES ('keep-me','movie','Keep Me')")
+    c.commit()
+    assert "source_url" not in {r[1] for r in c.execute("PRAGMA table_info(titles)")}
+    c.close()
+    db.init_db(path)
+    with db.session(path) as conn:
+        assert "source_url" in {r["name"] for r in conn.execute("PRAGMA table_info(titles)")}
+        assert "url" in {r["name"] for r in conn.execute("PRAGMA table_info(media_files)")}
+        assert conn.execute("SELECT name FROM titles WHERE slug='keep-me'").fetchone()[0] == "Keep Me"      # data survives
+
+
+# ------------------------------------------------------------------ discover (TMDB)
+def _tmdb_client(client, fake_ia, monkeypatch, key="a" * 32):
+    monkeypatch.setenv("TMDB_API_KEY", key)
+    monkeypatch.setenv("TMDB_BASE", fake_ia + "/tmdb/3")
+    client.appmod.tmdb._cache.clear()
+    return client
+
+
+def test_discover_disabled_without_key(client):
+    r = client.get("/api/discover?q=thrones").get_json()
+    assert r["enabled"] is False and r["items"] == []
+    assert client.get("/api/discover/series/1399").status_code == 404
+
+
+def test_discover_search_trending_and_library_link(client, fake_ia, monkeypatch):
+    _tmdb_client(client, fake_ia, monkeypatch)
+    r = client.get("/api/discover?q=game of thrones").get_json()
+    assert r["enabled"] and [i["name"] for i in r["items"]] == ["Game of Thrones"]          # people results are dropped
+    got = r["items"][0]
+    assert got["kind"] == "series" and got["year"] == 2011 and got["library_slug"] is None and got["poster"].endswith("/w342/got.jpg")
+    m = client.get("/api/discover?q=metropolis").get_json()["items"][0]
+    assert m["kind"] == "movie" and m["library_slug"] == "metropolis"                           # already free in the library
+    t = client.get("/api/discover").get_json()
+    assert t["trending"] and t["items"][0]["name"] == "Game of Thrones"
+
+
+def test_discover_detail_trailer_cast_and_where_to_watch(client, fake_ia, monkeypatch):
+    _tmdb_client(client, fake_ia, monkeypatch)
+    d = client.get("/api/discover/series/1399?region=us").get_json()
+    assert d["name"] == "Game of Thrones" and d["seasons"] == 8 and d["episodes"] == 73 and d["runtime"] == 60
+    assert d["trailer"] == "TRAILERKEY"                                      # official YouTube trailer beats clips and Vimeo
+    assert d["people"] == ["David Benioff", "D. B. Weiss"] and d["cast"][0]["character"] == "Daenerys Targaryen"
+    w = d["watch"]
+    assert w["region"] == "US" and [p["name"] for p in w["stream"]] == ["Max"] and w["rent"][0]["name"] == "Apple TV" and w["buy"][0]["name"] == "Amazon Video"
+    assert w["link"].startswith("https://www.themoviedb.org/") and set(w["regions"]) == {"US", "KE"}
+    ke = client.get("/api/discover/series/1399?region=KE").get_json()["watch"]
+    assert [p["name"] for p in ke["stream"]] == ["Showmax"] and ke["rent"] == []
+    assert client.get("/api/discover/series/999999").status_code == 404
+    assert client.get("/api/discover/book/1").status_code == 404
+
+
+def test_tmdb_key_styles(client, fake_ia, monkeypatch):
+    _tmdb_client(client, fake_ia, monkeypatch, key="k" * 32)               # v3 API key -> query parameter
+    client.get("/api/discover?q=thrones")
+    assert LAST_TMDB["qs"].get("api_key") == ["k" * 32] and LAST_TMDB["auth"] is None
+    token = "eyJ" + "x" * 150
+    _tmdb_client(client, fake_ia, monkeypatch, key=token)                  # v4 read-access token -> bearer header
+    client.get("/api/discover?q=metropolis")
+    assert LAST_TMDB["auth"] == f"Bearer {token}" and "api_key" not in LAST_TMDB["qs"]
+
+
+def test_tmdb_errors_are_friendly(client, fake_ia, monkeypatch):
+    _tmdb_client(client, fake_ia, monkeypatch)
+    monkeypatch.setenv("TMDB_BASE", "http://127.0.0.1:1/unreachable")      # nothing listening
+    client.appmod.tmdb._cache.clear()
+    r = client.get("/api/discover?q=thrones")
+    assert r.status_code == 502 and "TMDB" in r.get_json()["error"]

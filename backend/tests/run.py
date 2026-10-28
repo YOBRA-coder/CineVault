@@ -9,6 +9,9 @@ class MP:
     def __init__(self): self.undo = []
     def setenv(self, k, v):
         self.undo.append((k, os.environ.get(k))); os.environ[k] = v
+    def restore(self):
+        for k, old in reversed(self.undo):
+            os.environ.pop(k, None) if old is None else os.environ.__setitem__(k, old)
 
 
 gen = T.fake_ia.__wrapped__() if hasattr(T.fake_ia, "__wrapped__") else T.fake_ia()
@@ -20,6 +23,12 @@ for name, fn in tests:
     try:
         kwargs = {}
         params = inspect.signature(fn).parameters
+        if "fake_ia" in params:
+            kwargs["fake_ia"] = ia
+        if "monkeypatch" in params:
+            kwargs["monkeypatch"] = mp
+        if "tmp_path" in params:
+            kwargs["tmp_path"] = tmp
         if "client" in params:
             kwargs["client"] = T.client(ia, mp, tmp)
         fn(**kwargs)
@@ -27,5 +36,7 @@ for name, fn in tests:
     except Exception:
         fails += 1
         print(f"FAIL {name}"); traceback.print_exc()
+    finally:
+        mp.restore()
 print(f"\n{len(tests) - fails}/{len(tests)} passed")
 sys.exit(1 if fails else 0)

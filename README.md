@@ -41,6 +41,21 @@ python app.py tmdb        # optional: needs TMDB_API_KEY – real posters, backd
 | **PWA** | Installable on Android, iOS, Windows, macOS & ChromeOS (**Install app** button, home-screen icon, standalone window, app shortcuts) · offline app shell + previously opened pages · offline banner · one-tap **update prompt** · lock-screen / headset media controls while playing |
 | **UX** | Responsive, keyboard accessible, reduced-motion aware, graceful fallbacks when art or the archive is unavailable |
 
+## Where the titles come from (and what isn't possible)
+
+| Source | What you get | Play / download |
+|---|---|---|
+| **Internet Archive** (bundled + importer) | Public-domain & CC films and series. Admin → *Import* has collection presets (feature films, classic TV, silent, noir, sci-fi/horror, animation, open-source movies, Prelinger) and a **strict licence** toggle. Import keeps paging until it finds N *new* titles. `python app.py import 200 classic_tv --all` does the same from the CLI. | yes |
+| **Blender open movies** (bundled) | Big Buck Bunny, Elephants Dream, Sintel, Tears of Steel (CC BY) from download.blender.org. | yes |
+| **Any folder of video links** | Titles with a `source_url` (see `seed_data.DIRECT`) list the files in an open directory. | yes |
+| **Collection links** | Paste an archive.org *collection* link in Admin → *Add by link*: it becomes a series, one episode per item. | yes |
+| **Discover** (needs a free `TMDB_API_KEY`, v3 key or v4 token) | Search *every* movie and series (e.g. Game of Thrones): details, cast, trailer, and **where to watch legally** per country (JustWatch data via TMDB). | info only |
+
+Recent or commercial titles such as Game of Thrones cannot be legally hosted or downloaded by this app, so Discover
+shows where they stream, rent or sell instead. If a title also exists free in your library it is flagged *Free in library*.
+Bundled archive.org identifiers are best guesses that *Sync* verifies and repairs, and bundled ratings are approximate until TMDB enrichment runs.
+Existing databases are upgraded automatically: new bundled titles are added without touching or resurrecting anything you deleted.
+
 ## Admin panel
 Open **/admin** (link in the footer). From there you can import films from archive.org (with a live log), re-check files,
 enrich from TMDB, **add a title by pasting an archive.org link** (a series becomes one episode per video file),
@@ -87,7 +102,7 @@ Rebuild the front end after editing `src/`: `cd frontend && npm install && npm r
 ```bash
 cd backend && python tests/run.py      # or: pytest tests
 ```
-23 API tests run against a strict fake archive server (search, filters, sync, range streaming, downloads, history, ratings, import, admin).
+38 API tests run against a strict fake archive server (search, filters, sync, range streaming, downloads, history, ratings, import, admin).
 
 ## Good to know
 * **Client identity**: each browser gets an anonymous id (stored in `localStorage`) – history, list and ratings follow it.

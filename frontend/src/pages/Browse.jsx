@@ -19,6 +19,7 @@ export default function Browse() {
 
   const [{ data: genreList }] = useFetch(`/genres${kind ? `?kind=${kind}` : ''}`, []);
   const [showFilters, setShowFilters] = useState(false);
+  const [{ data: health }] = useFetch('/health');
 
   const qs = new URLSearchParams({ page, per_page: 24 });
   if (q) qs.set('q', q);
@@ -83,6 +84,9 @@ export default function Browse() {
         </div>
       )}
 
+      {q && health?.tmdb && data && !loading && (
+        <div className="notice discover-cta">Not the one you wanted? <Link to={`/discover?q=${encodeURIComponent(q)}`}>Search every movie & series for “{q}”</Link> — details, trailers and where to watch.</div>
+      )}
       {data?.fuzzy && data.items.length > 0 && <div className="notice">No exact matches for “{q}” — showing the closest titles.</div>}
       {loading && <div className="page-center short"><Spinner /></div>}
       {error && <Empty icon="info" title="Something went wrong">{error.message}</Empty>}

@@ -28,5 +28,5 @@ services:
         value: "0"
       - key: PROXY_DOWNLOAD        # 1 = downloads are saved with proper names through your server
         value: "1"
-      - key: TMDB_API_KEY          # optional: posters / cast / ratings
+      - key: TMDB_API_KEY          # optional: turns on Discover + real posters, cast, ratings
         sync: false

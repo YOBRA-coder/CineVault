@@ -52,6 +52,8 @@ def popularity(rating, votes):
 
 
 def _upsert_title(conn, **f):
+    f.setdefault("source_url", None)
+    f.setdefault("license", "Public Domain")
     row = conn.execute("SELECT id FROM titles WHERE slug = ?", (f["slug"],)).fetchone()
     if row:
         # keep user-affecting live fields (poster/sources/popularity); refresh editorial metadata
@@ -64,17 +66,26 @@ def _upsert_title(conn, **f):
         return row["id"]
     cur = conn.execute(
         """INSERT INTO titles(slug, kind, name, year, description, rating, votes, runtime, director,
-             poster_url, backdrop_url, ia_identifier, ia_collection, popularity, featured, country, language)
+             poster_url, backdrop_url, ia_identifier, ia_collection, popularity, featured, country, language, source_url, license)
            VALUES (:slug,:kind,:name,:year,:description,:rating,:votes,:runtime,:director,
-             :poster_url,:backdrop_url,:ia_identifier,:ia_collection,:popularity,:featured,:country,:language)""",
+             :poster_url,:backdrop_url,:ia_identifier,:ia_collection,:popularity,:featured,:country,:language,:source_url,:license)""",
         f,
     )
     return cur.lastrowid
 
 
-def seed(conn):
-    """Insert/refresh the bundled catalog. Safe to run repeatedly."""
+def _skip(conn, slug, only_missing):
+    if conn.execute("SELECT 1 FROM deleted_slugs WHERE slug=?", (slug,)).fetchone():
+        return True                      # an admin deleted it - keep it deleted
+    return only_missing and conn.execute("SELECT 1 FROM titles WHERE slug=?", (slug,)).fetchone() is not None
+
+
+def seed(conn, only_missing=False):
+    """Insert/refresh the bundled catalog. Safe to run repeatedly.
+    only_missing=True adds new bundled titles to an existing database without touching anything already there."""
     for (slug, name, year, genres, runtime, director, rating, votes, ia_id, cast, desc) in seed_data.MOVIES:
+        if _skip(conn, slug, only_missing):
+            continue
         tid = _upsert_title(
             conn, slug=slug, kind="movie", name=name, year=year, description=desc, rating=rating, votes=votes,
             runtime=runtime, director=director, poster_url=ia_thumb(ia_id), backdrop_url=ia_thumb(ia_id),
@@ -85,6 +96,8 @@ def seed(conn):
         _set_cast(conn, tid, director, cast)
 
     for (slug, name, year, genres, ep_rt, creator, rating, votes, ia_id, ia_col, cast, desc, seasons) in seed_data.SERIES:
+        if _skip(conn, slug, only_missing):
+            continue
         tid = _upsert_title(
             conn, slug=slug, kind="series", name=name, year=year, description=desc, rating=rating, votes=votes,
             runtime=ep_rt, director=creator, poster_url=ia_thumb(ia_id), backdrop_url=ia_thumb(ia_id),
@@ -103,6 +116,15 @@ def seed(conn):
                          air_date=excluded.air_date""",
                     (tid, season, n, ename, edesc, ep_rt, str(eyear)),
                 )
+    for (slug, name, year, genres, runtime, director, rating, votes, folder, licence, cast, desc) in seed_data.DIRECT:
+        if _skip(conn, slug, only_missing):
+            continue
+        tid = _upsert_title(
+            conn, slug=slug, kind="movie", name=name, year=year, description=desc, rating=rating, votes=votes, runtime=runtime,
+            director=director, poster_url=None, backdrop_url=None, ia_identifier=None, ia_collection=None,
+            popularity=popularity(rating, votes), featured=0, country=None, language="English", source_url=folder, license=licence)
+        set_genres(conn, tid, genres)
+        _set_cast(conn, tid, director, cast)
     db.rebuild_fts(conn)
 
 
@@ -115,7 +137,9 @@ def _set_cast(conn, tid, director, cast):
 
 
 def ensure_seeded(conn):
+    """Empty database -> full seed. Existing database -> only add bundled titles it doesn't have yet."""
     if conn.execute("SELECT COUNT(*) AS c FROM titles").fetchone()["c"] == 0:
         seed(conn)
         return True
+    seed(conn, only_missing=True)
     return False
